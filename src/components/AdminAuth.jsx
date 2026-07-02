@@ -556,15 +556,17 @@ export default function AdminAuth() {
                 </FormField>
               )}
 
-              <FormField label="University">
-                <UniversityDropdown
-                  value={university}
-                  open={uniOpen}
-                  onToggle={() => { setUniOpen(o => !o); setRoleOpen(false); }}
-                  onSelect={v => { setUniversity(v); setUniOpen(false); }}
-                  universities={UNIVERSITIES}
-                />
-              </FormField>
+              {isSignup && (
+                <FormField label="University">
+                  <UniversityDropdown
+                    value={university}
+                    open={uniOpen}
+                    onToggle={() => { setUniOpen(o => !o); setRoleOpen(false); }}
+                    onSelect={v => { setUniversity(v); setUniOpen(false); }}
+                    universities={UNIVERSITIES}
+                  />
+                </FormField>
+              )}
 
               {isSignup && (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
