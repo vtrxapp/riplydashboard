@@ -455,20 +455,14 @@ export default function AdminAuth() {
 
       if (error) { showToast(error.message); return; }
 
-      // Upsert user profile
-      if (data.user) {
-        await supabase.from('users').upsert({
-          id: data.user.id,
-          email,
-          name,
-          university,
-          campus,
-          role: 'admin',
-        });
+      // The handle_new_user() DB trigger creates the profile row automatically.
+      if (data.session) {
+        showToast('Account created! Signing you in…');
+        navigate('/admin/dashboard');
+      } else {
+        showToast('Account created! Check your email to confirm before signing in.');
+        switchMode('login');
       }
-
-      showToast('Account created! Signing you in…');
-      navigate('/admin/dashboard');
     } else {
       setLoading(true);
       const { error } = await supabase.auth.signInWithPassword({ email, password });
