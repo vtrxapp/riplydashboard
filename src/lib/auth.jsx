@@ -20,8 +20,13 @@ export function useAuth() {
   return useContext(AuthContext);
 }
 
+// TEMP: auth bypass so the dashboard can be previewed without a confirmed
+// session. Restore the session check below before shipping this.
+const BYPASS_AUTH = true;
+
 export function PrivateRoute({ children }) {
   const { session } = useAuth();
+  if (BYPASS_AUTH) return children;
   if (session === undefined) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', fontFamily: 'Montserrat', color: '#7B8499' }}>
