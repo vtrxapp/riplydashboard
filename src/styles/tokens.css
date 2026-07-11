@@ -1,0 +1,86 @@
+/*
+ * Design tokens. Every color/spacing value the UI uses lives here as a CSS
+ * variable, so dark mode is a matter of overriding variables on
+ * `[data-theme="dark"]` — replacing the old brittle approach of matching
+ * inline `style="background: rgb(...)"` strings with CSS attribute
+ * selectors (see the previous src/index.css `.rd-dark [style*=...]` rules).
+ */
+
+:root {
+  /* Brand */
+  --color-brand-50: #e9f6ff;
+  --color-brand-400: #19bfff;
+  --color-brand-500: #0098f0;
+  --color-brand-600: #0e84e0;
+  --color-brand-gradient: linear-gradient(135deg, #19bfff, #0e84e0);
+
+  /* Accent palette used across charts/badges */
+  --color-violet: #7c5cff;
+  --color-violet-bg: #f1ecff;
+  --color-green: #15a34a;
+  --color-green-bg: #e4f7ec;
+  --color-amber: #f59e0b;
+  --color-amber-bg: #fff6ec;
+  --color-red: #e5484d;
+  --color-red-bg: #fde7e4;
+  --color-pink: #ff5a8a;
+
+  /* Surfaces */
+  --color-bg: #eef1f6;
+  --color-surface: #ffffff;
+  --color-surface-alt: #f8fafc;
+  --color-surface-muted: #f1f3f7;
+  --color-border: #e8ebf0;
+  --color-border-strong: #e2e6ec;
+  --color-divider: #f1f3f7;
+
+  /* Text */
+  --color-text: #0e1726;
+  --color-text-secondary: #5b6473;
+  --color-text-muted: #7b8499;
+  --color-text-faint: #9aa3b2;
+  --color-text-on-brand: #ffffff;
+
+  /* Shadows */
+  --shadow-card: 0 4px 16px rgba(16, 24, 40, 0.05);
+  --shadow-popover: 0 12px 32px rgba(16, 24, 40, 0.16);
+  --shadow-brand: 0 6px 16px rgba(2, 162, 240, 0.3);
+
+  /* Radii + spacing */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-full: 999px;
+
+  --font-sans: 'Montserrat', -apple-system, system-ui, sans-serif;
+
+  --sidebar-width: 248px;
+  --header-height: 78px;
+}
+
+[data-theme='dark'] {
+  --color-bg: #0c1019;
+  --color-surface: #171e2b;
+  --color-surface-alt: #1f2735;
+  --color-surface-muted: #252f40;
+  --color-border: #2a3446;
+  --color-border-strong: #2a3446;
+  --color-divider: #232d3e;
+
+  --color-text: #f4f6fa;
+  --color-text-secondary: #c2c9d6;
+  --color-text-muted: #aeb6c4;
+  --color-text-faint: #8892a3;
+
+  --shadow-card: 0 4px 16px rgba(0, 0, 0, 0.35);
+  --shadow-popover: 0 16px 40px rgba(0, 0, 0, 0.5);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
