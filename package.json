@@ -5,7 +5,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "db:migrate": "node scripts/apply-migrations.mjs",
+    "test:db": "node scripts/test-db.mjs",
+    "test:auth": "node scripts/test-auth.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.0",
@@ -15,6 +18,7 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
+    "pg": "^8.16.3",
     "vite": "^5.4.8"
   }
 }

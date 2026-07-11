@@ -143,12 +143,15 @@ export const fetchNotifications = async () => {
   if (!user) return [];
   const { data, error } = await supabase
     .from('notifications')
-    .select('*')
+    .select('id, user_id, title, body, read, created_at, type, kind')
     .eq('user_id', user.id)
     .order('created_at', { ascending: false })
     .limit(20);
   if (error) throw error;
-  return data ?? [];
+  return (data ?? []).map((n) => ({
+    ...n,
+    kind: n.kind ?? n.type ?? 'event',
+  }));
 };
 
 export const markAllNotificationsRead = async () => {
