@@ -21,11 +21,10 @@ export async function fetchMessages(chatId: string): Promise<Message[]> {
   return MessageListSchema.parse(data ?? []);
 }
 
-export async function sendMessage(chatId: string, content: string): Promise<Message> {
-  const { data: authData } = await supabase.auth.getUser();
+export async function sendMessage(chatId: string, senderId: string, content: string): Promise<Message> {
   const { data, error } = await supabase
     .from('messages')
-    .insert({ chat_id: chatId, sender_id: authData.user?.id, content })
+    .insert({ chat_id: chatId, sender_id: senderId, content })
     .select('id, chat_id, sender_id, content, created_at')
     .single();
   if (error) throw new AppError(error.message, error);

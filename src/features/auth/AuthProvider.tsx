@@ -1,43 +1,36 @@
 /* eslint-disable react-refresh/only-export-components -- Provider + useAuth hook are intentionally co-located */
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { Session } from '@supabase/supabase-js';
+import { createContext, useContext, useMemo, type ReactNode } from 'react';
+import { useAuth as useClerkAuth } from '@clerk/react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { supabase } from '@/lib/supabaseClient';
-import { fetchCurrentProfile, signOut as signOutService } from '@/services/auth.service';
+import { fetchCurrentProfile } from '@/services/auth.service';
 import { profileQueryKey } from '@/hooks/queries/queryKeys';
 import type { User, UserRole } from '@/types/user';
 
 export type AuthStatus = 'loading' | 'authenticated' | 'unauthenticated';
 
 interface AuthContextValue {
-  session: Session | null;
+  userId: string | null;
   profile: User | null;
   role: UserRole | null;
   status: AuthStatus;
+  /** True once we know the user is signed in via Clerk but has no `public.users` row yet. */
+  needsOnboarding: boolean;
   profileError: string | null;
   signOut: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+/**
+ * Identity comes entirely from Clerk (`useClerkAuth`/`useClerk`); this
+ * provider layers the app-specific `public.users` profile (university,
+ * campus, role) on top, keyed by Clerk's `userId`. Supabase itself never
+ * issues or tracks a session here — see `src/lib/supabaseClient.ts`, which
+ * authenticates every request with the Clerk session token directly.
+ */
 export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
-  const [session, setSession] = useState<Session | null | undefined>(undefined); // undefined = not yet resolved
-
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data.session));
-
-    const { data: subscription } = supabase.auth.onAuthStateChange((event, nextSession) => {
-      setSession(nextSession);
-      if (event === 'SIGNED_OUT') {
-        queryClient.clear();
-      }
-    });
-
-    return () => subscription.subscription.unsubscribe();
-  }, [queryClient]);
-
-  const userId = session?.user?.id;
+  const { isLoaded, isSignedIn, userId, signOut: clerkSignOut } = useClerkAuth();
 
   const profileQuery = useQuery({
     queryKey: userId ? profileQueryKey(userId) : ['auth', 'profile', 'none'],
@@ -48,23 +41,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   });
 
   const status: AuthStatus = useMemo(() => {
-    if (session === undefined) return 'loading';
-    if (!session) return 'unauthenticated';
-    return 'authenticated';
-  }, [session]);
+    if (!isLoaded) return 'loading';
+    return isSignedIn ? 'authenticated' : 'unauthenticated';
+  }, [isLoaded, isSignedIn]);
 
   const value: AuthContextValue = useMemo(
     () => ({
-      session: session ?? null,
+      userId: userId ?? null,
       profile: profileQuery.data ?? null,
       role: profileQuery.data?.role ?? null,
       status,
+      needsOnboarding: status === 'authenticated' && profileQuery.isFetched && profileQuery.data == null,
       profileError: profileQuery.error ? (profileQuery.error as Error).message : null,
       signOut: async () => {
-        await signOutService();
+        queryClient.clear();
+        await clerkSignOut();
       },
     }),
-    [session, profileQuery.data, profileQuery.error, status],
+    [userId, profileQuery.data, profileQuery.isFetched, profileQuery.error, status, clerkSignOut, queryClient],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

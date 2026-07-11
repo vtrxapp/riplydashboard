@@ -20,6 +20,7 @@ export class MissingEnvError extends Error {
 export interface AppEnv {
   supabaseUrl: string;
   supabaseAnonKey: string;
+  clerkPublishableKey: string;
   appName: string;
 }
 
@@ -29,6 +30,7 @@ function readEnv(): AppEnv {
 
   if (!raw.VITE_SUPABASE_URL) missing.push('VITE_SUPABASE_URL');
   if (!raw.VITE_SUPABASE_ANON_KEY) missing.push('VITE_SUPABASE_ANON_KEY');
+  if (!raw.VITE_CLERK_PUBLISHABLE_KEY) missing.push('VITE_CLERK_PUBLISHABLE_KEY');
 
   if (missing.length > 0) {
     throw new MissingEnvError(missing);
@@ -37,6 +39,7 @@ function readEnv(): AppEnv {
   return {
     supabaseUrl: raw.VITE_SUPABASE_URL,
     supabaseAnonKey: raw.VITE_SUPABASE_ANON_KEY,
+    clerkPublishableKey: raw.VITE_CLERK_PUBLISHABLE_KEY,
     appName: raw.VITE_APP_NAME || 'Riply Admin',
   };
 }

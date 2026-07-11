@@ -100,11 +100,11 @@ export function useDeleteEvent() {
 
 export function useCreateEvent() {
   const queryClient = useQueryClient();
-  const { profile } = useAuth();
+  const { profile, userId } = useAuth();
   const showToast = useUiStore((s) => s.showToast);
 
   return useMutation({
-    mutationFn: (input: CreateEventInput) => createEvent(input, profile?.university ?? ''),
+    mutationFn: (input: CreateEventInput) => createEvent(input, profile?.university ?? '', userId ?? ''),
     onSuccess: () => {
       showToast('Event submitted for approval!');
       invalidateEventCaches(queryClient);

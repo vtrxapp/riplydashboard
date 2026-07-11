@@ -21,6 +21,7 @@ export default defineConfig({
           query: ['@tanstack/react-query'],
           charts: ['recharts'],
           supabase: ['@supabase/supabase-js'],
+          clerk: ['@clerk/react'],
         },
       },
     },

@@ -1,12 +1,13 @@
 /* eslint-disable react-refresh/only-export-components -- this module intentionally exports a router config, not components */
 import { lazy, Suspense } from 'react';
 import { Navigate, createBrowserRouter } from 'react-router-dom';
-import { RouteGuard, RedirectIfAuthed } from '@/features/auth/RouteGuard';
+import { RouteGuard, RedirectIfAuthed, OnboardingGuard } from '@/features/auth/RouteGuard';
 import { DashboardLayout } from './DashboardLayout';
 import { FullscreenLoader } from '@/components/ui/FullscreenLoader';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 const AuthPage = lazy(() => import('@/features/auth/AuthPage'));
+const OnboardingPage = lazy(() => import('@/features/auth/OnboardingPage'));
 const OverviewPage = lazy(() => import('@/features/overview/OverviewPage'));
 const EventsPage = lazy(() => import('@/features/events/EventsPage'));
 const GroupsPage = lazy(() => import('@/features/groups/GroupsPage'));
@@ -32,6 +33,15 @@ export const router = createBrowserRouter([
       <RedirectIfAuthed>
         <AuthPage />
       </RedirectIfAuthed>,
+    ),
+  },
+  {
+    path: '/admin/onboarding',
+    element: withSuspense(
+      <OnboardingGuard>
+        <OnboardingPage />
+      </OnboardingGuard>,
+      'Loading…',
     ),
   },
   {

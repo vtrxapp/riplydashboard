@@ -17,20 +17,14 @@ export const ROLE_OPTIONS: { value: UserRole; label: string }[] = [
   { value: 'umsu_admin', label: 'UMSU Administrator' },
 ];
 
-export const SignupSchema = z.object({
+// Email/password/verification are all handled by Clerk's own <SignIn>/<SignUp>
+// components now — this schema only covers the Riply-specific profile fields
+// (university/campus/role) collected on the onboarding screen right after a
+// Clerk sign-up.
+export const OnboardingSchema = z.object({
   name: z.string().trim().min(2, 'Enter your full name'),
   university: z.string().min(1, 'Please select your university'),
   campus: z.string().trim().optional().default(''),
   role: UserRole,
-  email: z.string().trim().email('Enter a valid email address'),
-  password: z.string().min(8, 'Password must be at least 8 characters'),
-  terms: z.boolean().refine((v) => v === true, { message: 'Please accept the Terms to continue' }),
 });
-export type SignupInput = z.infer<typeof SignupSchema>;
-
-export const LoginSchema = z.object({
-  university: z.string().min(1, 'Please select your university'),
-  email: z.string().trim().email('Enter a valid email address'),
-  password: z.string().min(1, 'Enter your password'),
-});
-export type LoginInput = z.infer<typeof LoginSchema>;
+export type OnboardingInput = z.infer<typeof OnboardingSchema>;

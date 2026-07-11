@@ -4,7 +4,7 @@ export const UserRole = z.enum(['organizer', 'staff', 'umsu_admin']);
 export type UserRole = z.infer<typeof UserRole>;
 
 export const UserSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string(), // Clerk user id, e.g. "user_2abC..." — not a uuid
   name: z.string().default(''),
   email: z.string().nullable().optional(),
   university: z.string().default(''),

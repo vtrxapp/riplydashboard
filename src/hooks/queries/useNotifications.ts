@@ -6,8 +6,7 @@ import { queryKeys } from './queryKeys';
 import { useAuth } from '@/features/auth/AuthProvider';
 
 export function useNotificationsQuery() {
-  const { session } = useAuth();
-  const userId = session?.user?.id;
+  const { userId } = useAuth();
 
   return useQuery({
     queryKey: userId ? queryKeys.notifications.list(userId) : ['notifications', 'none'],
@@ -18,8 +17,7 @@ export function useNotificationsQuery() {
 }
 
 export function useRealtimeNotifications() {
-  const { session } = useAuth();
-  const userId = session?.user?.id;
+  const { userId } = useAuth();
   const queryClient = useQueryClient();
 
   useEffect(() => {
@@ -36,8 +34,7 @@ export function useRealtimeNotifications() {
 }
 
 export function useMarkAllNotificationsRead() {
-  const { session } = useAuth();
-  const userId = session?.user?.id;
+  const { userId } = useAuth();
   const queryClient = useQueryClient();
 
   return useMutation({

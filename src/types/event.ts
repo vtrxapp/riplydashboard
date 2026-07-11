@@ -20,7 +20,7 @@ export const EventSchema = z.object({
   image_url: z.string().nullable().optional(),
   org: z.string().nullable().optional(),
   university: z.string().optional(),
-  created_by: z.string().uuid().nullable().optional(),
+  created_by: z.string().nullable().optional(), // Clerk user id
   created_at: z.string(),
 });
 export type Event = z.infer<typeof EventSchema>;
@@ -43,7 +43,7 @@ export const EventReviewSchema = z.object({
   id: z.number(),
   event_id: z.string().uuid(),
   event_title: z.string().nullable().optional(),
-  user_id: z.string().uuid().nullable().optional(),
+  user_id: z.string().nullable().optional(), // Clerk user id
   rating: z.number().min(1).max(5),
   body: z.string().nullable().optional(),
   created_at: z.string(),

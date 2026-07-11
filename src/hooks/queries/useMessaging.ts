@@ -5,6 +5,7 @@ import type { Message } from '@/types/messaging';
 import { queryKeys } from './queryKeys';
 import { useUiStore } from '@/stores/uiStore';
 import { toErrorMessage } from '@/lib/errors';
+import { useAuth } from '@/features/auth/AuthProvider';
 
 export function useChatsQuery() {
   return useQuery({ queryKey: queryKeys.chats.list(), queryFn: fetchChats, staleTime: 10_000 });
@@ -40,9 +41,10 @@ export function useRealtimeMessages(chatId: string | null) {
 export function useSendMessage(chatId: string | null) {
   const queryClient = useQueryClient();
   const showToast = useUiStore((s) => s.showToast);
+  const { userId } = useAuth();
 
   return useMutation({
-    mutationFn: (content: string) => sendMessage(chatId as string, content),
+    mutationFn: (content: string) => sendMessage(chatId as string, userId ?? '', content),
     onSuccess: (message) => {
       queryClient.setQueryData<Message[]>(queryKeys.chats.messages(chatId as string), (old) =>
         old ? [...old.filter((m) => m.id !== message.id), message] : [message],

@@ -8,13 +8,14 @@ vi.mock('../AuthProvider', () => ({
   useAuth: () => mockUseAuth(),
 }));
 
-import { RouteGuard, RedirectIfAuthed } from '../RouteGuard';
+import { RouteGuard, RedirectIfAuthed, OnboardingGuard } from '../RouteGuard';
 
 function renderWithRoute(node: React.ReactNode, initialPath = '/admin/dashboard/overview') {
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
       <Routes>
         <Route path="/admin/dashboard/overview" element={node} />
+        <Route path="/admin/onboarding" element={node} />
         <Route path="/admin/auth" element={<div>Auth screen</div>} />
         <Route path="/admin/dashboard" element={<div>Dashboard screen</div>} />
       </Routes>
@@ -23,7 +24,7 @@ function renderWithRoute(node: React.ReactNode, initialPath = '/admin/dashboard/
 }
 
 describe('RouteGuard', () => {
-  it('shows a loading state while the session is being resolved', () => {
+  it('shows a loading state while the Clerk session is being resolved', () => {
     mockUseAuth.mockReturnValue({ status: 'loading' });
     renderWithRoute(
       <RouteGuard>
@@ -45,8 +46,8 @@ describe('RouteGuard', () => {
     expect(screen.queryByText('Protected content')).not.toBeInTheDocument();
   });
 
-  it('renders children for authenticated users', () => {
-    mockUseAuth.mockReturnValue({ status: 'authenticated' });
+  it('renders children for authenticated, fully-onboarded users', () => {
+    mockUseAuth.mockReturnValue({ status: 'authenticated', needsOnboarding: false });
     renderWithRoute(
       <RouteGuard>
         <div>Protected content</div>
@@ -54,11 +55,21 @@ describe('RouteGuard', () => {
     );
     expect(screen.getByText('Protected content')).toBeInTheDocument();
   });
+
+  it('redirects signed-in users with no profile row yet to onboarding', () => {
+    mockUseAuth.mockReturnValue({ status: 'authenticated', needsOnboarding: true });
+    renderWithRoute(
+      <RouteGuard>
+        <div>Protected content</div>
+      </RouteGuard>,
+    );
+    expect(screen.queryByText('Protected content')).not.toBeInTheDocument();
+  });
 });
 
 describe('RedirectIfAuthed', () => {
-  it('redirects already-authenticated users to the dashboard', () => {
-    mockUseAuth.mockReturnValue({ status: 'authenticated' });
+  it('redirects already-onboarded, authenticated users to the dashboard', () => {
+    mockUseAuth.mockReturnValue({ status: 'authenticated', needsOnboarding: false });
     renderWithRoute(
       <RedirectIfAuthed>
         <div>Auth form</div>
@@ -76,5 +87,40 @@ describe('RedirectIfAuthed', () => {
       </RedirectIfAuthed>,
     );
     expect(screen.getByText('Auth form')).toBeInTheDocument();
+  });
+});
+
+describe('OnboardingGuard', () => {
+  it('redirects unauthenticated visitors to the auth screen', () => {
+    mockUseAuth.mockReturnValue({ status: 'unauthenticated' });
+    renderWithRoute(
+      <OnboardingGuard>
+        <div>Onboarding form</div>
+      </OnboardingGuard>,
+      '/admin/onboarding',
+    );
+    expect(screen.getByText('Auth screen')).toBeInTheDocument();
+  });
+
+  it('renders the onboarding form for signed-in users with no profile yet', () => {
+    mockUseAuth.mockReturnValue({ status: 'authenticated', needsOnboarding: true });
+    renderWithRoute(
+      <OnboardingGuard>
+        <div>Onboarding form</div>
+      </OnboardingGuard>,
+      '/admin/onboarding',
+    );
+    expect(screen.getByText('Onboarding form')).toBeInTheDocument();
+  });
+
+  it('redirects already-onboarded users straight to the dashboard', () => {
+    mockUseAuth.mockReturnValue({ status: 'authenticated', needsOnboarding: false });
+    renderWithRoute(
+      <OnboardingGuard>
+        <div>Onboarding form</div>
+      </OnboardingGuard>,
+      '/admin/onboarding',
+    );
+    expect(screen.queryByText('Onboarding form')).not.toBeInTheDocument();
   });
 });

@@ -58,8 +58,7 @@ export async function fetchPendingEvents(): Promise<Event[]> {
   return EventListSchema.parse(data ?? []);
 }
 
-export async function createEvent(input: CreateEventInput, university: string): Promise<Event> {
-  const { data: authData } = await supabase.auth.getUser();
+export async function createEvent(input: CreateEventInput, university: string, createdBy: string): Promise<Event> {
   const { data, error } = await supabase
     .from('events')
     .insert({
@@ -73,7 +72,7 @@ export async function createEvent(input: CreateEventInput, university: string): 
       price: input.price,
       capacity: input.capacity,
       status: 'pending',
-      created_by: authData.user?.id,
+      created_by: createdBy,
       university,
     })
     .select(LIST_COLUMNS)

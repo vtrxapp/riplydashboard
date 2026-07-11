@@ -14,7 +14,7 @@ export const ChatListSchema = z.array(ChatSchema);
 export const MessageSchema = z.object({
   id: z.number(),
   chat_id: z.string().uuid(),
-  sender_id: z.string().uuid().nullable().optional(),
+  sender_id: z.string().nullable().optional(), // Clerk user id
   content: z.string(),
   created_at: z.string(),
 });
@@ -23,7 +23,7 @@ export const MessageListSchema = z.array(MessageSchema);
 
 export const NotificationSchema = z.object({
   id: z.number(),
-  user_id: z.string().uuid(),
+  user_id: z.string(), // Clerk user id
   kind: z.string().default('event'),
   title: z.string(),
   body: z.string().nullable().optional(),
