@@ -14,7 +14,7 @@ create table if not exists public.groups (
   event_count int not null default 0,
   university text not null default '',
   archived boolean not null default false,
-  created_by uuid references public.users (id) on delete set null,
+  created_by text references public.users (id) on delete set null,
   created_at timestamptz not null default now()
 );
 
@@ -28,7 +28,7 @@ create index if not exists groups_university_idx on public.groups (university);
 create table if not exists public.group_members (
   id bigint generated always as identity primary key,
   group_id uuid not null references public.groups (id) on delete cascade,
-  user_id uuid not null references public.users (id) on delete cascade,
+  user_id text not null references public.users (id) on delete cascade,
   joined_at timestamptz not null default now(),
   unique (group_id, user_id)
 );
@@ -38,7 +38,7 @@ create index if not exists group_members_joined_at_idx on public.group_members (
 create table if not exists public.group_posts (
   id bigint generated always as identity primary key,
   group_id uuid not null references public.groups (id) on delete cascade,
-  user_id uuid references public.users (id) on delete set null,
+  user_id text references public.users (id) on delete set null,
   created_at timestamptz not null default now()
 );
 create index if not exists group_posts_group_idx on public.group_posts (group_id);

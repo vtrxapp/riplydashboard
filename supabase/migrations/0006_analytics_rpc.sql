@@ -19,7 +19,7 @@ language sql stable security definer set search_path = public as $$
   with uni as (select public.current_university() as u),
   scoped_events as (
     select e.* from public.events e, uni
-    where e.university = uni.u and (p_scope <> 'mine' or e.created_by = auth.uid())
+    where e.university = uni.u and (p_scope <> 'mine' or e.created_by = public.clerk_user_id())
   )
   select
     (select count(*) from public.users u, uni where u.university = uni.u and u.created_at <= p_to),

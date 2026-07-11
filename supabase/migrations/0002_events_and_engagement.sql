@@ -25,7 +25,7 @@ create table if not exists public.events (
   image_url text,
   org text,
   university text not null default '',
-  created_by uuid references public.users (id) on delete set null,
+  created_by text references public.users (id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -55,7 +55,7 @@ create trigger events_set_updated_at before update on public.events
 create table if not exists public.event_views (
   id bigint generated always as identity primary key,
   event_id uuid not null references public.events (id) on delete cascade,
-  user_id uuid references public.users (id) on delete set null,
+  user_id text references public.users (id) on delete set null,
   created_at timestamptz not null default now()
 );
 create index if not exists event_views_event_idx on public.event_views (event_id);
@@ -65,7 +65,7 @@ create index if not exists event_views_created_at_idx on public.event_views (cre
 create table if not exists public.event_rsvps (
   id bigint generated always as identity primary key,
   event_id uuid not null references public.events (id) on delete cascade,
-  user_id uuid references public.users (id) on delete set null,
+  user_id text references public.users (id) on delete set null,
   attended_at timestamptz,
   created_at timestamptz not null default now(),
   unique (event_id, user_id)
@@ -78,7 +78,7 @@ create index if not exists event_rsvps_created_at_idx on public.event_rsvps (cre
 create table if not exists public.tickets (
   id bigint generated always as identity primary key,
   event_id uuid not null references public.events (id) on delete cascade,
-  user_id uuid references public.users (id) on delete set null,
+  user_id text references public.users (id) on delete set null,
   price_cents int not null default 0,
   created_at timestamptz not null default now()
 );
@@ -89,7 +89,7 @@ create index if not exists tickets_created_at_idx on public.tickets (created_at)
 create table if not exists public.event_likes (
   id bigint generated always as identity primary key,
   event_id uuid not null references public.events (id) on delete cascade,
-  user_id uuid references public.users (id) on delete set null,
+  user_id text references public.users (id) on delete set null,
   created_at timestamptz not null default now(),
   unique (event_id, user_id)
 );
@@ -100,7 +100,7 @@ create table if not exists public.event_reviews (
   id bigint generated always as identity primary key,
   event_id uuid not null references public.events (id) on delete cascade,
   event_title text,
-  user_id uuid references public.users (id) on delete set null,
+  user_id text references public.users (id) on delete set null,
   rating smallint not null check (rating between 1 and 5),
   body text,
   created_at timestamptz not null default now()

@@ -14,7 +14,7 @@ create table if not exists public.chats (
 
 create table if not exists public.chat_members (
   chat_id uuid not null references public.chats (id) on delete cascade,
-  user_id uuid not null references public.users (id) on delete cascade,
+  user_id text not null references public.users (id) on delete cascade,
   created_at timestamptz not null default now(),
   primary key (chat_id, user_id)
 );
@@ -23,7 +23,7 @@ create index if not exists chat_members_user_idx on public.chat_members (user_id
 create table if not exists public.messages (
   id bigint generated always as identity primary key,
   chat_id uuid not null references public.chats (id) on delete cascade,
-  sender_id uuid references public.users (id) on delete set null,
+  sender_id text references public.users (id) on delete set null,
   content text not null,
   created_at timestamptz not null default now()
 );

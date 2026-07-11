@@ -3,7 +3,7 @@
 
 create table if not exists public.notifications (
   id bigint generated always as identity primary key,
-  user_id uuid not null references public.users (id) on delete cascade,
+  user_id text not null references public.users (id) on delete cascade,
   kind text not null default 'event',
   title text not null,
   body text,
@@ -39,7 +39,7 @@ returns trigger language plpgsql security definer set search_path = public as $$
 declare
   v_count int;
   v_title text;
-  v_owner uuid;
+  v_owner text;
   v_milestones int[] := array[50, 100, 250, 500, 1000, 2500, 5000, 10000];
   v_m int;
 begin
@@ -69,7 +69,7 @@ create or replace function public.notify_ticket_sold()
 returns trigger language plpgsql security definer set search_path = public as $$
 declare
   v_title text;
-  v_owner uuid;
+  v_owner text;
 begin
   select title, created_by into v_title, v_owner from public.events where id = new.event_id;
   if v_owner is not null then
@@ -88,7 +88,7 @@ create or replace function public.notify_new_group_member()
 returns trigger language plpgsql security definer set search_path = public as $$
 declare
   v_name text;
-  v_owner uuid;
+  v_owner text;
 begin
   select name, created_by into v_name, v_owner from public.groups where id = new.group_id;
   if v_owner is not null and v_owner <> new.user_id then

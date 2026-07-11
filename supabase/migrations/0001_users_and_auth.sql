@@ -1,5 +1,15 @@
 -- 0001_users_and_auth.sql
--- Core `users` profile table (1:1 with auth.users) + role-based access control.
+-- Core `users` profile table + role-based access control.
+--
+-- Identity for this app is provided by Clerk, configured in the Supabase
+-- dashboard as a Third-Party Auth provider (Authentication -> Sign In / Up
+-- -> Third-Party Auth -> Clerk). Supabase verifies Clerk-issued JWTs
+-- directly against Clerk's JWKS endpoint and stamps them with
+-- `"role": "authenticated"` — there is no `auth.users` row for these users
+-- (that table belongs to Supabase's own GoTrue auth, which this app does
+-- not use). Because of that, `users.id` stores Clerk's user id
+-- (e.g. `user_2abC...`) as plain text rather than a uuid FK to `auth.users`.
+--
 -- Written idempotently so it is safe to run against a project that already
 -- has some of this schema in place.
 
@@ -11,7 +21,7 @@ exception when duplicate_object then null;
 end $$;
 
 create table if not exists public.users (
-  id uuid primary key references auth.users (id) on delete cascade,
+  id text primary key,
   name text not null default '',
   email text,
   university text not null default '',
@@ -23,7 +33,8 @@ create table if not exists public.users (
   created_at timestamptz not null default now()
 );
 
-comment on table public.users is 'Application profile row for every authenticated admin/organizer user.';
+comment on table public.users is 'Application profile row for every admin/organizer user, keyed by Clerk user id.';
+comment on column public.users.id is 'Clerk user id (the "sub" claim of the Clerk-issued JWT), not a Supabase auth.users id.';
 
 alter table public.users add column if not exists email text;
 alter table public.users add column if not exists program text;
@@ -36,53 +47,19 @@ create index if not exists users_role_idx on public.users (role);
 
 alter table public.users enable row level security;
 
--- ── handle_new_user(): populate public.users automatically after signup ────
--- Reads the metadata passed via supabase.auth.signUp({ options: { data } }).
-create or replace function public.handle_new_user()
-returns trigger
-language plpgsql
-security definer set search_path = public
+-- ── Clerk identity helpers used throughout RLS policies + RPCs ─────────────
+
+-- The Clerk user id for the current request, read from the verified JWT's
+-- `sub` claim (set by Supabase's Clerk Third-Party Auth integration).
+create or replace function public.clerk_user_id()
+returns text
+language sql stable
 as $$
-begin
-  insert into public.users (id, name, email, university, campus, role, created_at)
-  values (
-    new.id,
-    coalesce(new.raw_user_meta_data->>'name', split_part(new.email, '@', 1)),
-    new.email,
-    coalesce(new.raw_user_meta_data->>'university', ''),
-    coalesce(new.raw_user_meta_data->>'campus', ''),
-    coalesce(
-      (new.raw_user_meta_data->>'role'),
-      'organizer'
-    )::public.user_role,
-    now()
-  )
-  on conflict (id) do nothing;
-  return new;
-exception when invalid_text_representation then
-  -- role text didn't map to a known enum value (e.g. free-form "Club Organizer") — default safely.
-  insert into public.users (id, name, email, university, campus, role, created_at)
-  values (
-    new.id,
-    coalesce(new.raw_user_meta_data->>'name', split_part(new.email, '@', 1)),
-    new.email,
-    coalesce(new.raw_user_meta_data->>'university', ''),
-    coalesce(new.raw_user_meta_data->>'campus', ''),
-    'organizer',
-    now()
-  )
-  on conflict (id) do nothing;
-  return new;
-end;
+  select (auth.jwt()->>'sub');
 $$;
 
-drop trigger if exists on_auth_user_created on auth.users;
-create trigger on_auth_user_created
-  after insert on auth.users
-  for each row execute procedure public.handle_new_user();
-
--- Helper used throughout RLS policies: is the current user an UMSU admin?
-create or replace function public.is_admin(p_uid uuid default auth.uid())
+-- Is the current user an UMSU admin?
+create or replace function public.is_admin(p_uid text default public.clerk_user_id())
 returns boolean
 language sql stable security definer set search_path = public
 as $$
@@ -91,10 +68,20 @@ as $$
   );
 $$;
 
--- Helper: current user's university (used to scope multi-tenant queries).
-create or replace function public.current_university(p_uid uuid default auth.uid())
+-- Current user's university (used to scope multi-tenant queries).
+create or replace function public.current_university(p_uid text default public.clerk_user_id())
 returns text
 language sql stable security definer set search_path = public
 as $$
   select u.university from public.users u where u.id = p_uid;
+$$;
+
+-- Does the current Clerk user already have a completed profile row? The
+-- client uses this to decide whether to route to the onboarding screen
+-- (university/campus/role) right after a Clerk sign-up.
+create or replace function public.has_profile()
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (select 1 from public.users where id = public.clerk_user_id());
 $$;
