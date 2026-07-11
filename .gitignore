@@ -4,3 +4,6 @@ dist/
 .env.local
 .env.*.local
 .DS_Store
+
+# Never commit MCP secrets (Supabase tokens, etc.)
+.cursor/mcp.json
