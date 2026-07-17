@@ -513,6 +513,24 @@ export default function AdminAuth() {
     if (profileErr) throw profileErr;
   };
 
+  // generateUsername() has a large random suffix space, but a collision is
+  // still possible — retry with a fresh username a few times before giving
+  // up, instead of failing signup on an avoidable "username taken" error.
+  const MAX_USERNAME_ATTEMPTS = 3;
+  const createSignUpWithUsername = async (params) => {
+    let lastErr;
+    for (let attempt = 0; attempt < MAX_USERNAME_ATTEMPTS; attempt++) {
+      try {
+        return await signUp.create({ ...params, username: generateUsername(params.emailAddress) });
+      } catch (err) {
+        lastErr = err;
+        const code = err.errors?.[0]?.code;
+        if (code !== 'form_identifier_exists' && code !== 'form_username_invalid_character') throw err;
+      }
+    }
+    throw lastErr;
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (loading) return;
@@ -525,10 +543,9 @@ export default function AdminAuth() {
 
       setLoading(true);
       try {
-        const result = await signUp.create({
+        const result = await createSignUpWithUsername({
           emailAddress: email,
           password,
-          username: generateUsername(email),
           unsafeMetadata: { name, university, campus, role },
         });
 
