@@ -135,10 +135,16 @@ Deno.serve(async (req: Request) => {
     const email = await fetchClerkEmail(userId);
     if (!email) return json({ error: "Could not resolve account email" }, 400);
 
-    await sendEmail(email, code);
+    try {
+      await sendEmail(email, code);
+    } catch (err) {
+      console.error("device-verify-request: sendEmail failed", err);
+      return json({ error: (err as Error).message ?? "Email send failed" }, 502);
+    }
 
     return json({ success: true });
   } catch (err) {
+    console.error("device-verify-request: unexpected error", err);
     return json({ error: (err as Error).message ?? "Unexpected error" }, 500);
   }
 });

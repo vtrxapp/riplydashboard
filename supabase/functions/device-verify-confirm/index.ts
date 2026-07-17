@@ -82,6 +82,7 @@ Deno.serve(async (req: Request) => {
         return json({ error: "Unexpected error" }, 500);
     }
   } catch (err) {
+    console.error("device-verify-confirm: unexpected error", err);
     return json({ error: (err as Error).message ?? "Unexpected error" }, 500);
   }
 });
