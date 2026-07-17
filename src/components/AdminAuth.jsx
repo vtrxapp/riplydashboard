@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useSignUp, useSignIn, useAuth } from '@clerk/clerk-react';
+import { useSignUp, useSignIn, useAuth, useUser } from '@clerk/clerk-react';
 import { supabase } from '../lib/supabase';
 import { isDeviceTrusted, requestDeviceCode, confirmDeviceCode } from '../lib/deviceTrust';
 
@@ -402,6 +402,7 @@ function generateUsername(email) {
 export default function AdminAuth() {
   const navigate = useNavigate();
   const { isLoaded: authLoaded, isSignedIn } = useAuth();
+  const { user } = useUser();
   const { signUp, setActive: setSignUpActive, isLoaded: signUpLoaded } = useSignUp();
   const { signIn, setActive: setSignInActive, isLoaded: signInLoaded } = useSignIn();
 
@@ -467,12 +468,29 @@ export default function AdminAuth() {
   // device — otherwise leave them here (avoids a bounce loop with
   // PrivateRoute's admin+device check), and prompt for device verification
   // if that's the only thing missing.
+  //
+  // If the Clerk session is already active but is_admin() is false, that
+  // means a previous provisionAdminProfile() call failed *after* Clerk
+  // verification already completed (e.g. a transient DB error) — Clerk
+  // won't let the user "verify" again since the signup is already done, so
+  // without this retry they'd be stuck signed in with no profile and no way
+  // to proceed. Retry once here using the live Clerk session.
   useEffect(() => {
-    if (!authLoaded || !isSignedIn) return;
+    if (!authLoaded || !isSignedIn || !user) return;
     let cancelled = false;
     (async () => {
-      const { data, error } = await supabase.rpc('is_admin');
-      if (cancelled || error || data !== true) return;
+      let { data, error } = await supabase.rpc('is_admin');
+      if (cancelled) return;
+      if (error || data !== true) {
+        try {
+          await provisionAdminProfile(user.id);
+        } catch {
+          return; // Leave them on this screen; nothing more to do automatically.
+        }
+        if (cancelled) return;
+        ({ data, error } = await supabase.rpc('is_admin'));
+        if (cancelled || error || data !== true) return;
+      }
       const trusted = await isDeviceTrusted();
       if (cancelled) return;
       if (trusted) {
@@ -482,7 +500,7 @@ export default function AdminAuth() {
       }
     })();
     return () => { cancelled = true; };
-  }, [authLoaded, isSignedIn, navigate]);
+  }, [authLoaded, isSignedIn, user, navigate]);
 
   const switchMode = (next) => {
     setMode(next);
@@ -492,23 +510,33 @@ export default function AdminAuth() {
   };
 
   // Creates the public.users + admin_profiles rows for a freshly-authenticated
-  // Clerk user. Throws on failure so callers can block navigation.
+  // Clerk user. Throws on failure so callers can block navigation. Reads from
+  // the live Clerk `user` object (falling back to local form state) rather
+  // than only local state, so a retry after the form has unmounted/reset —
+  // e.g. the automatic recovery below — still has the right values.
   const provisionAdminProfile = async (userId) => {
+    const meta = user?.unsafeMetadata ?? {};
+    const resolvedEmail = user?.primaryEmailAddress?.emailAddress || email;
+    const resolvedName = meta.name || name;
+    const resolvedUniversity = meta.university || university;
+    const resolvedCampus = meta.campus || campus;
+    const resolvedRole = meta.role || role;
+
     const { error: userErr } = await supabase.from('users').upsert({
       id: userId,
-      email,
-      name,
-      university,
-      campus,
+      email: resolvedEmail,
+      name: resolvedName,
+      university: resolvedUniversity,
+      campus: resolvedCampus,
       role: 'admin',
     }, { onConflict: 'id' });
     if (userErr) throw userErr;
 
     const { error: profileErr } = await supabase.from('admin_profiles').upsert({
       user_id: userId,
-      university,
-      campus,
-      role,
+      university: resolvedUniversity,
+      campus: resolvedCampus,
+      role: resolvedRole,
     }, { onConflict: 'user_id' });
     if (profileErr) throw profileErr;
   };
@@ -653,7 +681,13 @@ export default function AdminAuth() {
         try {
           await provisionAdminProfile(result.createdUserId);
         } catch (profileErr) {
-          showToast('Verified, but profile setup failed: ' + profileErr.message);
+          // The Clerk session is already active at this point (setSignUpActive
+          // above already ran), so Clerk won't allow "verifying" again if the
+          // user retries this form. Drop out of the verification screen —
+          // the recovery effect below will retry provisioning automatically
+          // now that isSignedIn is true, instead of leaving them stuck here.
+          showToast('Verified, but profile setup failed — retrying: ' + profileErr.message);
+          setVerifying(false);
           return;
         }
         // Clerk's signup code proves the account owner controls the inbox,
