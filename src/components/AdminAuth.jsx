@@ -456,13 +456,10 @@ export default function AdminAuth() {
       if (error) { showToast(error.message); return; }
 
       // The handle_new_user() DB trigger creates the profile row automatically.
-      if (data.session) {
-        showToast('Account created! Signing you in…');
-        navigate('/admin/dashboard');
-      } else {
-        showToast('Account created! Check your email to confirm before signing in.');
-        switchMode('login');
-      }
+      // TEMP: navigate straight to the dashboard for preview purposes, even
+      // without a confirmed session. Restore the session check before shipping.
+      showToast('Account created! Signing you in…');
+      navigate('/admin/dashboard');
     } else {
       setLoading(true);
       const { error } = await supabase.auth.signInWithPassword({ email, password });
