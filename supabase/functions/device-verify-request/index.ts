@@ -91,50 +91,60 @@ Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS_HEADERS });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
-  const userId = getUserIdFromAuthHeader(req);
-  if (!userId) return json({ error: "Unauthorized" }, 401);
-
-  let body: { device_token?: string };
+  // Wrap everything below in try/catch: an uncaught throw here (e.g. a
+  // missing secret, or fetchClerkEmail/sendEmail failing) would otherwise
+  // produce a bare 500 with no CORS headers, which browsers report as an
+  // opaque "Failed to fetch" / CORS error instead of the real message.
   try {
-    body = await req.json();
-  } catch {
-    return json({ error: "Invalid JSON body" }, 400);
-  }
-  const deviceToken = body.device_token;
-  if (!deviceToken || typeof deviceToken !== "string") {
-    return json({ error: "device_token is required" }, 400);
-  }
+    const userId = getUserIdFromAuthHeader(req);
+    if (!userId) return json({ error: "Unauthorized" }, 401);
 
-  const code = generateCode();
+    let body: { device_token?: string };
+    try {
+      body = await req.json();
+    } catch {
+      return json({ error: "Invalid JSON body" }, 400);
+    }
+    const deviceToken = body.device_token;
+    if (!deviceToken || typeof deviceToken !== "string") {
+      return json({ error: "device_token is required" }, 400);
+    }
 
-  // request_device_code/confirm_device_code are service_role-only (see
-  // migration 0004) and hash the code themselves — the browser never has a
-  // way to compute or supply a hash directly, closing the "call the RPC
-  // with a self-chosen hash" bypass. userId here comes from our own JWT
-  // parsing above, not from anything the client could override in the body.
-  const supabaseAdmin = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-  );
+    const code = generateCode();
 
-  const { data: allowed, error: rpcError } = await supabaseAdmin.rpc("request_device_code", {
-    p_user_id: userId,
-    p_device_token: deviceToken,
-    p_code: code,
-  });
-  if (rpcError) return json({ error: rpcError.message }, 500);
-  if (!allowed) {
-    return json({ error: "A code was already sent recently. Please wait before requesting another." }, 429);
-  }
+    // request_device_code/confirm_device_code are service_role-only (see
+    // migration 0004) and hash the code themselves — the browser never has a
+    // way to compute or supply a hash directly, closing the "call the RPC
+    // with a self-chosen hash" bypass. userId here comes from our own JWT
+    // parsing above, not from anything the client could override in the body.
+    const supabaseAdmin = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
 
-  const email = await fetchClerkEmail(userId);
-  if (!email) return json({ error: "Could not resolve account email" }, 400);
+    const { data: allowed, error: rpcError } = await supabaseAdmin.rpc("request_device_code", {
+      p_user_id: userId,
+      p_device_token: deviceToken,
+      p_code: code,
+    });
+    if (rpcError) return json({ error: rpcError.message }, 500);
+    if (!allowed) {
+      return json({ error: "A code was already sent recently. Please wait before requesting another." }, 429);
+    }
 
-  try {
-    await sendEmail(email, code);
+    const email = await fetchClerkEmail(userId);
+    if (!email) return json({ error: "Could not resolve account email" }, 400);
+
+    try {
+      await sendEmail(email, code);
+    } catch (err) {
+      console.error("device-verify-request: sendEmail failed", err);
+      return json({ error: (err as Error).message ?? "Email send failed" }, 502);
+    }
+
+    return json({ success: true });
   } catch (err) {
-    return json({ error: (err as Error).message }, 502);
+    console.error("device-verify-request: unexpected error", err);
+    return json({ error: (err as Error).message ?? "Unexpected error" }, 500);
   }
-
-  return json({ success: true });
 });
