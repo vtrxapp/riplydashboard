@@ -35,8 +35,6 @@ async function hashCode(code: string, userId: string, deviceToken: string) {
   return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-const MAX_ATTEMPTS = 5;
-
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS_HEADERS });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
@@ -56,52 +54,36 @@ Deno.serve(async (req: Request) => {
     return json({ error: "device_token and code are required" }, 400);
   }
 
-  const supabaseAdmin = createClient(
+  const codeHash = await hashCode(code, userId, deviceToken);
+
+  // Invoke as the caller so auth.uid() inside the function matches — the
+  // function does the compare/consume/trust-write atomically under a row
+  // lock, so concurrent guesses can't defeat the attempt limit and a failed
+  // trust insert can't happen after the code was already consumed.
+  const supabaseUser = createClient(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    Deno.env.get("SUPABASE_ANON_KEY")!,
+    { global: { headers: { Authorization: req.headers.get("Authorization")! } } },
   );
 
-  const { data: pending, error: fetchError } = await supabaseAdmin
-    .from("device_verifications")
-    .select("*")
-    .eq("user_id", userId)
-    .eq("device_token", deviceToken)
-    .maybeSingle();
+  const { data: outcome, error: rpcError } = await supabaseUser.rpc("confirm_device_code", {
+    p_device_token: deviceToken,
+    p_code_hash: codeHash,
+  });
+  if (rpcError) return json({ error: rpcError.message }, 500);
 
-  if (fetchError) return json({ error: fetchError.message }, 500);
-  if (!pending) return json({ error: "No pending code for this device. Request a new one." }, 400);
-
-  if (new Date(pending.expires_at).getTime() < Date.now()) {
-    await supabaseAdmin.from("device_verifications").delete().eq("id", pending.id);
-    return json({ error: "Code expired. Request a new one." }, 400);
+  switch (outcome) {
+    case "ok":
+      return json({ success: true });
+    case "not_found":
+      return json({ error: "No pending code for this device. Request a new one." }, 400);
+    case "expired":
+      return json({ error: "Code expired. Request a new one." }, 400);
+    case "too_many_attempts":
+      return json({ error: "Too many attempts. Request a new code." }, 429);
+    case "incorrect":
+      return json({ error: "Incorrect code." }, 400);
+    default:
+      return json({ error: "Unexpected error" }, 500);
   }
-
-  if (pending.attempts >= MAX_ATTEMPTS) {
-    await supabaseAdmin.from("device_verifications").delete().eq("id", pending.id);
-    return json({ error: "Too many attempts. Request a new code." }, 429);
-  }
-
-  const submittedHash = await hashCode(code, userId, deviceToken);
-  if (submittedHash !== pending.code_hash) {
-    await supabaseAdmin
-      .from("device_verifications")
-      .update({ attempts: pending.attempts + 1 })
-      .eq("id", pending.id);
-    return json({ error: "Incorrect code." }, 400);
-  }
-
-  // Correct code — consume it and record trust. This is the only code path
-  // in the whole app that can write to trusted_devices; clients have no
-  // RLS grant to do it themselves.
-  await supabaseAdmin.from("device_verifications").delete().eq("id", pending.id);
-
-  const { error: trustError } = await supabaseAdmin
-    .from("trusted_devices")
-    .upsert(
-      { user_id: userId, device_token: deviceToken },
-      { onConflict: "user_id,device_token" },
-    );
-  if (trustError) return json({ error: trustError.message }, 500);
-
-  return json({ success: true });
 });

@@ -20,12 +20,18 @@ export function PrivateRoute({ children }) {
     let cancelled = false;
     setAccess(undefined);
     (async () => {
-      const { data, error } = await supabase.rpc('is_admin');
-      if (cancelled) return;
-      if (error || data !== true) { setAccess(false); return; }
-      const trusted = await isDeviceTrusted();
-      if (cancelled) return;
-      setAccess(trusted);
+      try {
+        const { data, error } = await supabase.rpc('is_admin');
+        if (cancelled) return;
+        if (error || data !== true) { setAccess(false); return; }
+        const trusted = await isDeviceTrusted();
+        if (cancelled) return;
+        setAccess(trusted);
+      } catch {
+        // Fail closed rather than leaving the route stuck on "Loading…"
+        // forever if either check rejects (e.g. a network error).
+        if (!cancelled) setAccess(false);
+      }
     })();
     return () => { cancelled = true; };
   }, [isLoaded, isSignedIn]);

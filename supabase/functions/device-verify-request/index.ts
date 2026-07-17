@@ -46,15 +46,25 @@ function generateCode(): string {
   return String(n);
 }
 
+async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Fetch the account's real registered email from Clerk's Backend API —
 // never trust a client-supplied email address here, or an attacker could
 // redirect the code to an inbox they control.
 async function fetchClerkEmail(userId: string): Promise<string | null> {
   const secretKey = Deno.env.get("CLERK_SECRET_KEY");
   if (!secretKey) throw new Error("CLERK_SECRET_KEY not configured");
-  const res = await fetch(`https://api.clerk.com/v1/users/${userId}`, {
+  const res = await fetchWithTimeout(`https://api.clerk.com/v1/users/${userId}`, {
     headers: { Authorization: `Bearer ${secretKey}` },
-  });
+  }, 8000);
   if (!res.ok) return null;
   const user = await res.json();
   const primaryId = user.primary_email_address_id;
@@ -65,7 +75,7 @@ async function fetchClerkEmail(userId: string): Promise<string | null> {
 async function sendEmail(to: string, code: string) {
   const apiKey = Deno.env.get("RESEND_API_KEY");
   if (!apiKey) throw new Error("RESEND_API_KEY not configured");
-  const res = await fetch("https://api.resend.com/emails", {
+  const res = await fetchWithTimeout("https://api.resend.com/emails", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -77,7 +87,7 @@ async function sendEmail(to: string, code: string) {
       subject: "Your Riply device verification code",
       html: `<p>Your verification code is:</p><p style="font-size:28px;font-weight:700;letter-spacing:4px;">${code}</p><p>This code expires in 10 minutes. If you didn't request this, you can ignore this email.</p>`,
     }),
-  });
+  }, 8000);
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Resend API error: ${res.status} ${text}`);
@@ -102,25 +112,31 @@ Deno.serve(async (req: Request) => {
     return json({ error: "device_token is required" }, 400);
   }
 
-  const email = await fetchClerkEmail(userId);
-  if (!email) return json({ error: "Could not resolve account email" }, 400);
-
   const code = generateCode();
   const codeHash = await hashCode(code, userId, deviceToken);
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 
-  const supabaseAdmin = createClient(
+  // Invoke as the caller (forwarding their own JWT) so auth.uid() inside the
+  // function matches, and the advisory lock + cooldown check run atomically
+  // — this is what actually rate-limits/serializes issuance, not app code.
+  const supabaseUser = createClient(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    Deno.env.get("SUPABASE_ANON_KEY")!,
+    { global: { headers: { Authorization: req.headers.get("Authorization")! } } },
   );
 
-  const { error: upsertError } = await supabaseAdmin
-    .from("device_verifications")
-    .upsert(
-      { user_id: userId, device_token: deviceToken, code_hash: codeHash, attempts: 0, expires_at: expiresAt },
-      { onConflict: "user_id,device_token" },
-    );
-  if (upsertError) return json({ error: upsertError.message }, 500);
+  const { data: allowed, error: rpcError } = await supabaseUser.rpc("request_device_code", {
+    p_device_token: deviceToken,
+    p_code_hash: codeHash,
+    p_expires_at: expiresAt,
+  });
+  if (rpcError) return json({ error: rpcError.message }, 500);
+  if (!allowed) {
+    return json({ error: "A code was already sent recently. Please wait before requesting another." }, 429);
+  }
+
+  const email = await fetchClerkEmail(userId);
+  if (!email) return json({ error: "Could not resolve account email" }, 400);
 
   try {
     await sendEmail(email, code);
