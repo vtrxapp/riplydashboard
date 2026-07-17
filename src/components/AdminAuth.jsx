@@ -518,8 +518,7 @@ export default function AdminAuth() {
         const result = await signUp.create({
           emailAddress: email,
           password,
-          firstName: name,
-          unsafeMetadata: { university, campus, role },
+          unsafeMetadata: { name, university, campus, role },
         });
 
         if (result.status === 'complete') {
