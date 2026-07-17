@@ -389,6 +389,16 @@ const UNIVERSITIES = [
 
 const ROLES = ['Club Organizer', 'Department Staff', 'UMSU Administrator'];
 
+// This Clerk instance (shared with the mobile app) requires a username on
+// sign-up, but our admin form has no username field for the user to fill in.
+// Derive one from the email instead — it's never shown or used as a login
+// identifier here, just a value that satisfies Clerk's required field.
+function generateUsername(email) {
+  const base = (email.split('@')[0] || 'admin').replace(/[^a-zA-Z0-9_]/g, '').slice(0, 20) || 'admin';
+  const suffix = Math.random().toString(36).slice(2, 8);
+  return `${base}_${suffix}`;
+}
+
 export default function AdminAuth() {
   const navigate = useNavigate();
   const { isLoaded: authLoaded, isSignedIn } = useAuth();
@@ -503,6 +513,28 @@ export default function AdminAuth() {
     if (profileErr) throw profileErr;
   };
 
+  // generateUsername() has a large random suffix space, but a collision is
+  // still possible — retry with a fresh username a few times before giving
+  // up, instead of failing signup on an avoidable "username taken" error.
+  // form_identifier_exists also fires for an already-registered email, which
+  // a new username can't fix, so only retry when Clerk's error metadata
+  // points at the username field specifically.
+  const MAX_USERNAME_ATTEMPTS = 3;
+  const createSignUpWithUsername = async (params) => {
+    let lastErr;
+    for (let attempt = 0; attempt < MAX_USERNAME_ATTEMPTS; attempt++) {
+      try {
+        return await signUp.create({ ...params, username: generateUsername(params.emailAddress) });
+      } catch (err) {
+        lastErr = err;
+        const firstErr = err.errors?.[0];
+        const isUsernameConflict = firstErr?.code === 'form_identifier_exists' && firstErr?.meta?.paramName === 'username';
+        if (!isUsernameConflict) throw err;
+      }
+    }
+    throw lastErr;
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (loading) return;
@@ -515,7 +547,7 @@ export default function AdminAuth() {
 
       setLoading(true);
       try {
-        const result = await signUp.create({
+        const result = await createSignUpWithUsername({
           emailAddress: email,
           password,
           unsafeMetadata: { name, university, campus, role },
