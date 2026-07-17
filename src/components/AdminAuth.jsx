@@ -516,6 +516,9 @@ export default function AdminAuth() {
   // generateUsername() has a large random suffix space, but a collision is
   // still possible — retry with a fresh username a few times before giving
   // up, instead of failing signup on an avoidable "username taken" error.
+  // form_identifier_exists also fires for an already-registered email, which
+  // a new username can't fix, so only retry when Clerk's error metadata
+  // points at the username field specifically.
   const MAX_USERNAME_ATTEMPTS = 3;
   const createSignUpWithUsername = async (params) => {
     let lastErr;
@@ -524,8 +527,9 @@ export default function AdminAuth() {
         return await signUp.create({ ...params, username: generateUsername(params.emailAddress) });
       } catch (err) {
         lastErr = err;
-        const code = err.errors?.[0]?.code;
-        if (code !== 'form_identifier_exists' && code !== 'form_username_invalid_character') throw err;
+        const firstErr = err.errors?.[0];
+        const isUsernameConflict = firstErr?.code === 'form_identifier_exists' && firstErr?.meta?.paramName === 'username';
+        if (!isUsernameConflict) throw err;
       }
     }
     throw lastErr;
