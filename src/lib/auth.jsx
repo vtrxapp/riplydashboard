@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useAuth as useClerkAuth } from '@clerk/clerk-react';
 import { Navigate } from 'react-router-dom';
 import { supabase } from './supabase';
+import { isDeviceTrusted } from './deviceTrust';
 
 const LOADING_STYLE = {
   display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -10,24 +11,39 @@ const LOADING_STYLE = {
 
 export function PrivateRoute({ children }) {
   const { isLoaded, isSignedIn } = useClerkAuth();
-  const [isAdmin, setIsAdmin] = useState(undefined); // undefined = checking
+  const [access, setAccess] = useState(undefined); // undefined = checking, else boolean
 
   useEffect(() => {
     if (!isLoaded) return;
-    if (!isSignedIn) { setIsAdmin(false); return; }
+    if (!isSignedIn) { setAccess(false); return; }
 
     let cancelled = false;
-    setIsAdmin(undefined);
-    supabase.rpc('is_admin').then(({ data, error }) => {
-      if (cancelled) return;
-      setIsAdmin(!error && data === true);
-    });
+    setAccess(undefined);
+    (async () => {
+      try {
+        const { data, error } = await supabase.rpc('is_admin');
+        if (cancelled) return;
+        if (error || data !== true) { setAccess(false); return; }
+        const trusted = await isDeviceTrusted();
+        if (cancelled) return;
+        setAccess(trusted);
+      } catch {
+        // Fail closed rather than leaving the route stuck on "Loading…"
+        // forever if either check rejects (e.g. a network error).
+        if (!cancelled) setAccess(false);
+      }
+    })();
     return () => { cancelled = true; };
   }, [isLoaded, isSignedIn]);
 
-  if (!isLoaded || isAdmin === undefined) {
+  if (!isLoaded || access === undefined) {
     return <div style={LOADING_STYLE}>Loading…</div>;
   }
 
-  return isAdmin ? children : <Navigate to="/admin/auth" replace />;
+  // Not signed in, not an admin, or this browser hasn't completed the
+  // device-verification code yet — send back to /admin/auth, which handles
+  // showing whichever step is needed.
+  if (!access) return <Navigate to="/admin/auth" replace />;
+
+  return children;
 }

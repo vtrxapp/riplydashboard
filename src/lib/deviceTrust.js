@@ -1,0 +1,55 @@
+import { supabase } from './supabase';
+
+// A per-browser random identifier — not a trust flag. Whether this device
+// is actually trusted lives server-side in the trusted_devices table;
+// clients have no write access to it (see the device-verify-* Edge
+// Functions). This token just tags which row belongs to this browser.
+const TOKEN_KEY = 'riply_device_token';
+
+let sessionFallbackToken = null;
+
+export function getDeviceToken() {
+  try {
+    let token = localStorage.getItem(TOKEN_KEY);
+    if (!token) {
+      token = crypto.randomUUID();
+      localStorage.setItem(TOKEN_KEY, token);
+    }
+    return token;
+  } catch {
+    // localStorage unavailable (private browsing, storage disabled, etc.) —
+    // fall back to an in-memory token so the flow still works for this
+    // session, just without persistence across reloads.
+    if (!sessionFallbackToken) sessionFallbackToken = crypto.randomUUID();
+    return sessionFallbackToken;
+  }
+}
+
+export async function isDeviceTrusted() {
+  const deviceToken = getDeviceToken();
+  const { data, error } = await supabase
+    .from('trusted_devices')
+    .select('id')
+    .eq('device_token', deviceToken)
+    .maybeSingle();
+  return !error && Boolean(data);
+}
+
+export async function requestDeviceCode() {
+  const deviceToken = getDeviceToken();
+  const { data, error } = await supabase.functions.invoke('device-verify-request', {
+    body: { device_token: deviceToken },
+  });
+  if (error) throw error;
+  if (data?.error) throw new Error(data.error);
+}
+
+export async function confirmDeviceCode(code) {
+  const deviceToken = getDeviceToken();
+  const { data, error } = await supabase.functions.invoke('device-verify-confirm', {
+    body: { device_token: deviceToken, code },
+  });
+  if (error) throw error;
+  if (data?.error) throw new Error(data.error);
+  return data;
+}

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSignUp, useSignIn, useAuth } from '@clerk/clerk-react';
 import { supabase } from '../lib/supabase';
+import { isDeviceTrusted, requestDeviceCode, confirmDeviceCode } from '../lib/deviceTrust';
 
 // ─── Inline SVG icons ────────────────────────────────────────────────────────
 
@@ -401,6 +402,9 @@ export default function AdminAuth() {
   const [resetCode, setResetCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [showNewPw, setShowNewPw] = useState(false);
+  const [deviceVerifying, setDeviceVerifying] = useState(false); // new-device email check
+  const [deviceCode, setDeviceCode] = useState('');
+  const deviceCodeSentRef = useRef(false);
   const [loading, setLoading] = useState(false);
 
   // Shared fields
@@ -432,16 +436,41 @@ export default function AdminAuth() {
 
   useEffect(() => () => clearTimeout(toastTimer.current), []);
 
-  // Redirect if already signed in *and* an admin — otherwise leave them here
-  // (avoids a bounce loop with PrivateRoute's admin check).
+  // Sends a fresh server-verified email code to verify this browser and
+  // shows the device verification screen. Only enters deviceVerifying mode
+  // once the code has actually been sent — a failure shows a toast and
+  // leaves the user where they were instead of stranding them on a code
+  // screen with no code ever sent. Guards against double-sending on
+  // re-renders/effects firing more than once.
+  const beginDeviceVerification = async () => {
+    if (deviceCodeSentRef.current) { setDeviceVerifying(true); return; }
+    try {
+      await requestDeviceCode();
+      deviceCodeSentRef.current = true;
+      setDeviceVerifying(true);
+    } catch (err) {
+      showToast(err.message ?? 'Could not send verification code');
+    }
+  };
+
+  // Redirect if already signed in *and* an admin *and* this is a trusted
+  // device — otherwise leave them here (avoids a bounce loop with
+  // PrivateRoute's admin+device check), and prompt for device verification
+  // if that's the only thing missing.
   useEffect(() => {
     if (!authLoaded || !isSignedIn) return;
     let cancelled = false;
-    supabase.rpc('is_admin').then(({ data, error }) => {
-      if (!cancelled && !error && data === true) {
+    (async () => {
+      const { data, error } = await supabase.rpc('is_admin');
+      if (cancelled || error || data !== true) return;
+      const trusted = await isDeviceTrusted();
+      if (cancelled) return;
+      if (trusted) {
         navigate('/admin/dashboard', { replace: true });
+      } else {
+        beginDeviceVerification();
       }
-    });
+    })();
     return () => { cancelled = true; };
   }, [authLoaded, isSignedIn, navigate]);
 
@@ -501,8 +530,9 @@ export default function AdminAuth() {
             showToast('Signed in, but profile setup failed: ' + profileErr.message);
             return;
           }
-          showToast('Account created! Signing you in…');
-          navigate('/admin/dashboard');
+          // No email code was required to create the account, so this device
+          // still hasn't proven control of the inbox — do that now.
+          await beginDeviceVerification();
         } else {
           // Email verification required — send code and show verification screen
           await signUp.prepareEmailAddressVerification({ strategy: 'email_code' });
@@ -520,7 +550,12 @@ export default function AdminAuth() {
         const result = await signIn.create({ identifier: email, password });
         if (result.status === 'complete') {
           await setSignInActive({ session: result.createdSessionId });
-          navigate('/admin/dashboard');
+          const trusted = await isDeviceTrusted();
+          if (trusted) {
+            navigate('/admin/dashboard');
+          } else {
+            await beginDeviceVerification();
+          }
         } else {
           showToast('Additional verification required');
         }
@@ -556,7 +591,16 @@ export default function AdminAuth() {
       });
       if (result.status === 'complete') {
         await setSignInActive({ session: result.createdSessionId });
-        navigate('/admin/dashboard');
+        // Clerk's reset code proves the account owner controls the inbox,
+        // but trusting *this device* still goes through our own
+        // server-verified check (trust is only ever written by the
+        // device-verify-confirm Edge Function).
+        const trusted = await isDeviceTrusted();
+        if (trusted) {
+          navigate('/admin/dashboard');
+        } else {
+          await beginDeviceVerification();
+        }
       } else {
         showToast('Reset incomplete — please try again');
       }
@@ -581,7 +625,10 @@ export default function AdminAuth() {
           showToast('Verified, but profile setup failed: ' + profileErr.message);
           return;
         }
-        navigate('/admin/dashboard');
+        // Clerk's signup code proves the account owner controls the inbox,
+        // but this device still needs the same server-verified check as
+        // every other new device before we consider it trusted.
+        await beginDeviceVerification();
       } else {
         showToast('Verification incomplete — please try again');
       }
@@ -599,6 +646,29 @@ export default function AdminAuth() {
       showToast('New code sent to your email');
     } catch (err) {
       showToast(err.errors?.[0]?.message ?? err.message);
+    }
+  };
+
+  const handleVerifyDeviceCode = async (e) => {
+    e.preventDefault();
+    if (!deviceCode.trim() || loading) return;
+    setLoading(true);
+    try {
+      await confirmDeviceCode(deviceCode);
+      navigate('/admin/dashboard');
+    } catch (err) {
+      showToast(err.message ?? 'Verification failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResendDeviceCode = async () => {
+    try {
+      await requestDeviceCode();
+      showToast('New code sent to your email');
+    } catch (err) {
+      showToast(err.message ?? 'Could not resend code');
     }
   };
 
@@ -794,6 +864,72 @@ export default function AdminAuth() {
                   style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', color: '#0098F0', fontWeight: 700, cursor: 'pointer' }}
                 >
                   Go back
+                </button>
+              </div>
+            </>
+          ) : deviceVerifying ? (
+            <>
+              <div style={{ textAlign: 'center', marginBottom: 32 }}>
+                <div style={{
+                  width: 64, height: 64, borderRadius: '50%', margin: '0 auto 20px',
+                  background: 'linear-gradient(135deg,#19BFFF,#0E84E0)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <IconLock />
+                </div>
+                <div style={{ fontSize: 27, fontWeight: 800, letterSpacing: -0.6 }}>Verify this device</div>
+                <div style={{ fontSize: 14, color: '#7B8499', marginTop: 8 }}>
+                  For your security, we sent a 6-digit code to <strong style={{ color: '#1A2233' }}>{email || 'your email'}</strong> to confirm it's really you signing in from a new browser or device.
+                </div>
+              </div>
+
+              <form onSubmit={handleVerifyDeviceCode} style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+                <FormField label="Verification code">
+                  <InputRow>
+                    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0 }}>
+                      <rect x="4.5" y="10.5" width="15" height="9.5" rx="2.5" stroke="#9AA3B2" strokeWidth="1.9" />
+                      <path d="M8 10.5V8a4 4 0 0 1 8 0v2.5" stroke="#9AA3B2" strokeWidth="1.9" strokeLinecap="round" />
+                    </svg>
+                    <input
+                      value={deviceCode}
+                      onChange={e => setDeviceCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      placeholder="000000"
+                      inputMode="numeric"
+                      maxLength={6}
+                      style={{
+                        flex: 1, border: 'none', background: 'none',
+                        fontSize: 22, fontWeight: 700, color: '#1A2233',
+                        letterSpacing: 6, outline: 'none', fontFamily: 'inherit',
+                      }}
+                    />
+                  </InputRow>
+                </FormField>
+
+                <button
+                  type="submit"
+                  disabled={loading || deviceCode.length < 6}
+                  style={{
+                    width: '100%', height: 54, border: 'none', borderRadius: 15,
+                    background: (loading || deviceCode.length < 6) ? '#9AA3B2' : 'linear-gradient(135deg,#19BFFF,#0E84E0)',
+                    color: '#fff', fontSize: 16, fontWeight: 800,
+                    cursor: (loading || deviceCode.length < 6) ? 'not-allowed' : 'pointer',
+                    fontFamily: 'inherit',
+                    boxShadow: (loading || deviceCode.length < 6) ? 'none' : '0 8px 22px rgba(2,162,240,0.4)',
+                    marginTop: 2,
+                  }}
+                >
+                  {loading ? 'Verifying…' : 'Verify & continue'}
+                </button>
+              </form>
+
+              <div style={{ textAlign: 'center', marginTop: 24, fontSize: 13, color: '#7B8499' }}>
+                Didn't receive it?{' '}
+                <button
+                  type="button"
+                  onClick={handleResendDeviceCode}
+                  style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', color: '#0098F0', fontWeight: 700, cursor: 'pointer' }}
+                >
+                  Resend code
                 </button>
               </div>
             </>
