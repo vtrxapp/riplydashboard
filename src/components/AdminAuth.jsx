@@ -395,6 +395,8 @@ export default function AdminAuth() {
   const { signIn, setActive: setSignInActive, isLoaded: signInLoaded } = useSignIn();
 
   const [mode, setMode] = useState('signup'); // 'signup' | 'login'
+  const [verifying, setVerifying] = useState(false); // email verification step
+  const [verifyCode, setVerifyCode] = useState('');
   const [loading, setLoading] = useState(false);
 
   // Shared fields
@@ -459,7 +461,6 @@ export default function AdminAuth() {
 
         if (result.status === 'complete') {
           await setSignUpActive({ session: result.createdSessionId });
-          // Create the admin profile row in public.users now that we're authenticated
           await supabase.from('users').upsert({
             id: result.createdUserId,
             email,
@@ -471,7 +472,9 @@ export default function AdminAuth() {
           showToast('Account created! Signing you in…');
           navigate('/admin/dashboard');
         } else {
-          showToast('Account created! Check your email to verify before signing in.');
+          // Email verification required — send code and show verification screen
+          await signUp.prepareEmailAddressVerification({ strategy: 'email_code' });
+          setVerifying(true);
         }
       } catch (err) {
         showToast(err.errors?.[0]?.longMessage ?? err.errors?.[0]?.message ?? err.message);
@@ -505,6 +508,42 @@ export default function AdminAuth() {
       showToast('Password reset email sent');
     } catch (err) {
       showToast(err.errors?.[0]?.longMessage ?? err.errors?.[0]?.message ?? err.message);
+    }
+  };
+
+  const handleVerify = async (e) => {
+    e.preventDefault();
+    if (!verifyCode.trim() || loading) return;
+    setLoading(true);
+    try {
+      const result = await signUp.attemptEmailAddressVerification({ code: verifyCode });
+      if (result.status === 'complete') {
+        await setSignUpActive({ session: result.createdSessionId });
+        await supabase.from('users').upsert({
+          id: result.createdUserId,
+          email,
+          name,
+          university,
+          campus,
+          role: 'admin',
+        }, { onConflict: 'id' });
+        navigate('/admin/dashboard');
+      } else {
+        showToast('Verification incomplete — please try again');
+      }
+    } catch (err) {
+      showToast(err.errors?.[0]?.longMessage ?? err.errors?.[0]?.message ?? err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResendCode = async () => {
+    try {
+      await signUp.prepareEmailAddressVerification({ strategy: 'email_code' });
+      showToast('New code sent to your email');
+    } catch (err) {
+      showToast(err.errors?.[0]?.message ?? err.message);
     }
   };
 
@@ -542,13 +581,92 @@ export default function AdminAuth() {
       }}>
         <BrandPanel />
 
-        {/* ── Right form panel ── */}
+        {/* ── Right panel ── */}
         <div style={{
           flex: 1, minWidth: 0,
           display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
           overflowY: 'auto', padding: '48px 40px', boxSizing: 'border-box',
         }}>
           <div style={{ width: '100%', maxWidth: 440, margin: 'auto' }}>
+
+          {/* ── Email verification screen ── */}
+          {verifying ? (
+            <>
+              <div style={{ textAlign: 'center', marginBottom: 32 }}>
+                <div style={{
+                  width: 64, height: 64, borderRadius: '50%', margin: '0 auto 20px',
+                  background: 'linear-gradient(135deg,#19BFFF,#0E84E0)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
+                    <rect x="3.5" y="5.5" width="17" height="13" rx="3" stroke="#fff" strokeWidth="1.9" />
+                    <path d="m4.5 7 7.5 5.5L19.5 7" stroke="#fff" strokeWidth="1.9" strokeLinejoin="round" />
+                  </svg>
+                </div>
+                <div style={{ fontSize: 27, fontWeight: 800, letterSpacing: -0.6 }}>Check your email</div>
+                <div style={{ fontSize: 14, color: '#7B8499', marginTop: 8 }}>
+                  We sent a 6-digit code to <strong style={{ color: '#1A2233' }}>{email}</strong>
+                </div>
+              </div>
+
+              <form onSubmit={handleVerify} style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+                <FormField label="Verification code">
+                  <InputRow>
+                    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0 }}>
+                      <rect x="4.5" y="10.5" width="15" height="9.5" rx="2.5" stroke="#9AA3B2" strokeWidth="1.9" />
+                      <path d="M8 10.5V8a4 4 0 0 1 8 0v2.5" stroke="#9AA3B2" strokeWidth="1.9" strokeLinecap="round" />
+                    </svg>
+                    <input
+                      value={verifyCode}
+                      onChange={e => setVerifyCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      placeholder="000000"
+                      inputMode="numeric"
+                      maxLength={6}
+                      style={{
+                        flex: 1, border: 'none', background: 'none',
+                        fontSize: 22, fontWeight: 700, color: '#1A2233',
+                        letterSpacing: 6, outline: 'none', fontFamily: 'inherit',
+                      }}
+                    />
+                  </InputRow>
+                </FormField>
+
+                <button
+                  type="submit"
+                  disabled={loading || verifyCode.length < 6}
+                  style={{
+                    width: '100%', height: 54, border: 'none', borderRadius: 15,
+                    background: (loading || verifyCode.length < 6) ? '#9AA3B2' : 'linear-gradient(135deg,#19BFFF,#0E84E0)',
+                    color: '#fff', fontSize: 16, fontWeight: 800,
+                    cursor: (loading || verifyCode.length < 6) ? 'not-allowed' : 'pointer',
+                    fontFamily: 'inherit',
+                    boxShadow: (loading || verifyCode.length < 6) ? 'none' : '0 8px 22px rgba(2,162,240,0.4)',
+                    marginTop: 2,
+                  }}
+                >
+                  {loading ? 'Verifying…' : 'Verify & continue'}
+                </button>
+              </form>
+
+              <div style={{ textAlign: 'center', marginTop: 24, fontSize: 13, color: '#7B8499' }}>
+                Didn't receive it?{' '}
+                <span
+                  onClick={handleResendCode}
+                  style={{ color: '#0098F0', fontWeight: 700, cursor: 'pointer' }}
+                >
+                  Resend code
+                </span>
+                {' · '}
+                <span
+                  onClick={() => { setVerifying(false); setVerifyCode(''); }}
+                  style={{ color: '#0098F0', fontWeight: 700, cursor: 'pointer' }}
+                >
+                  Go back
+                </span>
+              </div>
+            </>
+          ) : (
+          <>
 
             {/* Segmented mode toggle */}
             <div style={{
@@ -730,6 +848,7 @@ export default function AdminAuth() {
                 {isSignup ? 'Sign in' : 'Create account'}
               </span>
             </div>
+          </>) /* end of !verifying else */}
           </div>
         </div>
       </div>
