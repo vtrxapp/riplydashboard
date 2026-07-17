@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useSignUp, useSignIn, useAuth } from '@clerk/clerk-react';
 import { supabase } from '../lib/supabase';
 
 // ─── Inline SVG icons ────────────────────────────────────────────────────────
@@ -389,6 +390,9 @@ const ROLES = ['Club Organizer', 'Department Staff', 'UMSU Administrator'];
 
 export default function AdminAuth() {
   const navigate = useNavigate();
+  const { isLoaded: authLoaded, isSignedIn } = useAuth();
+  const { signUp, setActive: setSignUpActive, isLoaded: signUpLoaded } = useSignUp();
+  const { signIn, setActive: setSignInActive, isLoaded: signInLoaded } = useSignIn();
 
   const [mode, setMode] = useState('signup'); // 'signup' | 'login'
   const [loading, setLoading] = useState(false);
@@ -422,12 +426,10 @@ export default function AdminAuth() {
 
   useEffect(() => () => clearTimeout(toastTimer.current), []);
 
-  // Redirect if already logged in
+  // Redirect if already signed in via Clerk
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      if (data.session) navigate('/admin/dashboard', { replace: true });
-    });
-  }, [navigate]);
+    if (authLoaded && isSignedIn) navigate('/admin/dashboard', { replace: true });
+  }, [authLoaded, isSignedIn, navigate]);
 
   const switchMode = (next) => {
     setMode(next);
@@ -444,37 +446,66 @@ export default function AdminAuth() {
       if (!university) { showToast('Please select your university'); return; }
       if (!name.trim()) { showToast('Please enter your full name'); return; }
       if (!terms) { showToast('Please accept the Terms to continue'); return; }
+      if (!signUpLoaded) return;
 
       setLoading(true);
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: { data: { name, university, campus, role } },
-      });
-      setLoading(false);
+      try {
+        const result = await signUp.create({
+          emailAddress: email,
+          password,
+          firstName: name,
+          unsafeMetadata: { university, campus, role },
+        });
 
-      if (error) { showToast(error.message); return; }
-
-      // The handle_new_user() DB trigger creates the profile row automatically.
-      // TEMP: navigate straight to the dashboard for preview purposes, even
-      // without a confirmed session. Restore the session check before shipping.
-      showToast('Account created! Signing you in…');
-      navigate('/admin/dashboard');
+        if (result.status === 'complete') {
+          await setSignUpActive({ session: result.createdSessionId });
+          // Create the admin profile row in public.users now that we're authenticated
+          await supabase.from('users').upsert({
+            id: result.createdUserId,
+            email,
+            name,
+            university,
+            campus,
+            role: 'admin',
+          }, { onConflict: 'id' });
+          showToast('Account created! Signing you in…');
+          navigate('/admin/dashboard');
+        } else {
+          showToast('Account created! Check your email to verify before signing in.');
+        }
+      } catch (err) {
+        showToast(err.errors?.[0]?.longMessage ?? err.errors?.[0]?.message ?? err.message);
+      } finally {
+        setLoading(false);
+      }
     } else {
+      if (!signInLoaded) return;
       setLoading(true);
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-      setLoading(false);
-
-      if (error) { showToast(error.message); return; }
-      navigate('/admin/dashboard');
+      try {
+        const result = await signIn.create({ identifier: email, password });
+        if (result.status === 'complete') {
+          await setSignInActive({ session: result.createdSessionId });
+          navigate('/admin/dashboard');
+        } else {
+          showToast('Additional verification required');
+        }
+      } catch (err) {
+        showToast(err.errors?.[0]?.longMessage ?? err.errors?.[0]?.message ?? err.message);
+      } finally {
+        setLoading(false);
+      }
     }
   };
 
   const handleForgot = async () => {
     if (!email) { showToast('Enter your email above first'); return; }
-    const { error } = await supabase.auth.resetPasswordForEmail(email);
-    if (error) { showToast(error.message); return; }
-    showToast('Password reset link sent to your email');
+    if (!signInLoaded) return;
+    try {
+      await signIn.create({ strategy: 'reset_password_email_code', identifier: email });
+      showToast('Password reset email sent');
+    } catch (err) {
+      showToast(err.errors?.[0]?.longMessage ?? err.errors?.[0]?.message ?? err.message);
+    }
   };
 
   const handleSSO = () => showToast('University SSO coming soon');
