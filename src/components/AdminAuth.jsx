@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSignUp, useSignIn, useAuth } from '@clerk/clerk-react';
 import { supabase } from '../lib/supabase';
-import { isDeviceTrusted, trustDevice } from '../lib/deviceTrust';
 
 // ─── Inline SVG icons ────────────────────────────────────────────────────────
 
@@ -391,7 +390,7 @@ const ROLES = ['Club Organizer', 'Department Staff', 'UMSU Administrator'];
 
 export default function AdminAuth() {
   const navigate = useNavigate();
-  const { isLoaded: authLoaded, isSignedIn, userId } = useAuth();
+  const { isLoaded: authLoaded, isSignedIn } = useAuth();
   const { signUp, setActive: setSignUpActive, isLoaded: signUpLoaded } = useSignUp();
   const { signIn, setActive: setSignInActive, isLoaded: signInLoaded } = useSignIn();
 
@@ -402,9 +401,6 @@ export default function AdminAuth() {
   const [resetCode, setResetCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [showNewPw, setShowNewPw] = useState(false);
-  const [deviceVerifying, setDeviceVerifying] = useState(false); // new-device email check
-  const [deviceCode, setDeviceCode] = useState('');
-  const deviceCodeSentRef = useRef(false);
   const [loading, setLoading] = useState(false);
 
   // Shared fields
@@ -436,36 +432,18 @@ export default function AdminAuth() {
 
   useEffect(() => () => clearTimeout(toastTimer.current), []);
 
-  // Sends a fresh email code to verify this browser and shows the device
-  // verification screen. Guards against double-sending on re-renders.
-  const beginDeviceVerification = async () => {
-    setDeviceVerifying(true);
-    if (deviceCodeSentRef.current) return;
-    deviceCodeSentRef.current = true;
-    try {
-      await window.Clerk?.user?.primaryEmailAddress?.prepareVerification({ strategy: 'email_code' });
-    } catch (err) {
-      showToast(err.errors?.[0]?.message ?? err.message);
-    }
-  };
-
-  // Redirect if already signed in *and* an admin *and* this is a trusted
-  // device — otherwise leave them here (avoids a bounce loop with
-  // PrivateRoute's admin+device check), and prompt for device verification
-  // if that's the only thing missing.
+  // Redirect if already signed in *and* an admin — otherwise leave them here
+  // (avoids a bounce loop with PrivateRoute's admin check).
   useEffect(() => {
     if (!authLoaded || !isSignedIn) return;
     let cancelled = false;
     supabase.rpc('is_admin').then(({ data, error }) => {
-      if (cancelled || error || data !== true) return;
-      if (isDeviceTrusted(userId)) {
+      if (!cancelled && !error && data === true) {
         navigate('/admin/dashboard', { replace: true });
-      } else {
-        beginDeviceVerification();
       }
     });
     return () => { cancelled = true; };
-  }, [authLoaded, isSignedIn, userId, navigate]);
+  }, [authLoaded, isSignedIn, navigate]);
 
   const switchMode = (next) => {
     setMode(next);
@@ -523,9 +501,8 @@ export default function AdminAuth() {
             showToast('Signed in, but profile setup failed: ' + profileErr.message);
             return;
           }
-          // No email code was required to create the account, so this device
-          // still hasn't proven control of the inbox — do that now.
-          await beginDeviceVerification();
+          showToast('Account created! Signing you in…');
+          navigate('/admin/dashboard');
         } else {
           // Email verification required — send code and show verification screen
           await signUp.prepareEmailAddressVerification({ strategy: 'email_code' });
@@ -543,11 +520,7 @@ export default function AdminAuth() {
         const result = await signIn.create({ identifier: email, password });
         if (result.status === 'complete') {
           await setSignInActive({ session: result.createdSessionId });
-          if (isDeviceTrusted(window.Clerk?.user?.id)) {
-            navigate('/admin/dashboard');
-          } else {
-            await beginDeviceVerification();
-          }
+          navigate('/admin/dashboard');
         } else {
           showToast('Additional verification required');
         }
@@ -583,8 +556,6 @@ export default function AdminAuth() {
       });
       if (result.status === 'complete') {
         await setSignInActive({ session: result.createdSessionId });
-        // The reset code already proved control of the inbox on this device.
-        trustDevice(window.Clerk?.user?.id);
         navigate('/admin/dashboard');
       } else {
         showToast('Reset incomplete — please try again');
@@ -610,8 +581,6 @@ export default function AdminAuth() {
           showToast('Verified, but profile setup failed: ' + profileErr.message);
           return;
         }
-        // This code already proved control of the inbox on this device.
-        trustDevice(result.createdUserId);
         navigate('/admin/dashboard');
       } else {
         showToast('Verification incomplete — please try again');
@@ -627,32 +596,6 @@ export default function AdminAuth() {
     if (!signUpLoaded) return;
     try {
       await signUp.prepareEmailAddressVerification({ strategy: 'email_code' });
-      showToast('New code sent to your email');
-    } catch (err) {
-      showToast(err.errors?.[0]?.message ?? err.message);
-    }
-  };
-
-  const handleVerifyDeviceCode = async (e) => {
-    e.preventDefault();
-    if (!deviceCode.trim() || loading) return;
-    setLoading(true);
-    try {
-      const emailAddr = window.Clerk?.user?.primaryEmailAddress;
-      if (!emailAddr) throw new Error('No email address found on this account');
-      await emailAddr.attemptVerification({ code: deviceCode });
-      trustDevice(window.Clerk.user.id);
-      navigate('/admin/dashboard');
-    } catch (err) {
-      showToast(err.errors?.[0]?.longMessage ?? err.errors?.[0]?.message ?? err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleResendDeviceCode = async () => {
-    try {
-      await window.Clerk?.user?.primaryEmailAddress?.prepareVerification({ strategy: 'email_code' });
       showToast('New code sent to your email');
     } catch (err) {
       showToast(err.errors?.[0]?.message ?? err.message);
@@ -851,72 +794,6 @@ export default function AdminAuth() {
                   style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', color: '#0098F0', fontWeight: 700, cursor: 'pointer' }}
                 >
                   Go back
-                </button>
-              </div>
-            </>
-          ) : deviceVerifying ? (
-            <>
-              <div style={{ textAlign: 'center', marginBottom: 32 }}>
-                <div style={{
-                  width: 64, height: 64, borderRadius: '50%', margin: '0 auto 20px',
-                  background: 'linear-gradient(135deg,#19BFFF,#0E84E0)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}>
-                  <IconLock />
-                </div>
-                <div style={{ fontSize: 27, fontWeight: 800, letterSpacing: -0.6 }}>Verify this device</div>
-                <div style={{ fontSize: 14, color: '#7B8499', marginTop: 8 }}>
-                  For your security, we sent a 6-digit code to <strong style={{ color: '#1A2233' }}>{email || 'your email'}</strong> to confirm it's really you signing in from a new browser or device.
-                </div>
-              </div>
-
-              <form onSubmit={handleVerifyDeviceCode} style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-                <FormField label="Verification code">
-                  <InputRow>
-                    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0 }}>
-                      <rect x="4.5" y="10.5" width="15" height="9.5" rx="2.5" stroke="#9AA3B2" strokeWidth="1.9" />
-                      <path d="M8 10.5V8a4 4 0 0 1 8 0v2.5" stroke="#9AA3B2" strokeWidth="1.9" strokeLinecap="round" />
-                    </svg>
-                    <input
-                      value={deviceCode}
-                      onChange={e => setDeviceCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                      placeholder="000000"
-                      inputMode="numeric"
-                      maxLength={6}
-                      style={{
-                        flex: 1, border: 'none', background: 'none',
-                        fontSize: 22, fontWeight: 700, color: '#1A2233',
-                        letterSpacing: 6, outline: 'none', fontFamily: 'inherit',
-                      }}
-                    />
-                  </InputRow>
-                </FormField>
-
-                <button
-                  type="submit"
-                  disabled={loading || deviceCode.length < 6}
-                  style={{
-                    width: '100%', height: 54, border: 'none', borderRadius: 15,
-                    background: (loading || deviceCode.length < 6) ? '#9AA3B2' : 'linear-gradient(135deg,#19BFFF,#0E84E0)',
-                    color: '#fff', fontSize: 16, fontWeight: 800,
-                    cursor: (loading || deviceCode.length < 6) ? 'not-allowed' : 'pointer',
-                    fontFamily: 'inherit',
-                    boxShadow: (loading || deviceCode.length < 6) ? 'none' : '0 8px 22px rgba(2,162,240,0.4)',
-                    marginTop: 2,
-                  }}
-                >
-                  {loading ? 'Verifying…' : 'Verify & continue'}
-                </button>
-              </form>
-
-              <div style={{ textAlign: 'center', marginTop: 24, fontSize: 13, color: '#7B8499' }}>
-                Didn't receive it?{' '}
-                <button
-                  type="button"
-                  onClick={handleResendDeviceCode}
-                  style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', color: '#0098F0', fontWeight: 700, cursor: 'pointer' }}
-                >
-                  Resend code
                 </button>
               </div>
             </>

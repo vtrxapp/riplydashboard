@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { useAuth as useClerkAuth } from '@clerk/clerk-react';
 import { Navigate } from 'react-router-dom';
 import { supabase } from './supabase';
-import { isDeviceTrusted } from './deviceTrust';
 
 const LOADING_STYLE = {
   display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -10,7 +9,7 @@ const LOADING_STYLE = {
 };
 
 export function PrivateRoute({ children }) {
-  const { isLoaded, isSignedIn, userId } = useClerkAuth();
+  const { isLoaded, isSignedIn } = useClerkAuth();
   const [isAdmin, setIsAdmin] = useState(undefined); // undefined = checking
 
   useEffect(() => {
@@ -30,11 +29,5 @@ export function PrivateRoute({ children }) {
     return <div style={LOADING_STYLE}>Loading…</div>;
   }
 
-  if (!isAdmin) return <Navigate to="/admin/auth" replace />;
-
-  // Admin, but this browser hasn't completed the email-code device check yet —
-  // send them back to /admin/auth, which handles showing that step.
-  if (!isDeviceTrusted(userId)) return <Navigate to="/admin/auth" replace />;
-
-  return children;
+  return isAdmin ? children : <Navigate to="/admin/auth" replace />;
 }
