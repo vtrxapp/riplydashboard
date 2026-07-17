@@ -35,10 +35,22 @@ export async function isDeviceTrusted() {
   return !error && Boolean(data);
 }
 
+// supabase.functions.invoke() does NOT use the client's `accessToken`
+// callback the way .from()/.rpc() do — it never attaches the Clerk-derived
+// Authorization header on its own, so the Edge Functions' own auth check
+// (which reads the `sub` claim from that header) always saw an unauthorized
+// request. Fetch the Clerk token explicitly and pass it through.
+async function authHeaders() {
+  const token = await window.Clerk?.session?.getToken();
+  if (!token) throw new Error('Not signed in');
+  return { Authorization: `Bearer ${token}` };
+}
+
 export async function requestDeviceCode() {
   const deviceToken = getDeviceToken();
   const { data, error } = await supabase.functions.invoke('device-verify-request', {
     body: { device_token: deviceToken },
+    headers: await authHeaders(),
   });
   if (error) throw error;
   if (data?.error) throw new Error(data.error);
@@ -48,6 +60,7 @@ export async function confirmDeviceCode(code) {
   const deviceToken = getDeviceToken();
   const { data, error } = await supabase.functions.invoke('device-verify-confirm', {
     body: { device_token: deviceToken, code },
+    headers: await authHeaders(),
   });
   if (error) throw error;
   if (data?.error) throw new Error(data.error);
