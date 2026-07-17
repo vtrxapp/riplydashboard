@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSignUp, useSignIn, useAuth } from '@clerk/clerk-react';
 import { supabase } from '../lib/supabase';
-import { isDeviceTrusted, trustDevice } from '../lib/deviceTrust';
+import { isDeviceTrusted, requestDeviceCode, confirmDeviceCode } from '../lib/deviceTrust';
 
 // ─── Inline SVG icons ────────────────────────────────────────────────────────
 
@@ -391,7 +391,7 @@ const ROLES = ['Club Organizer', 'Department Staff', 'UMSU Administrator'];
 
 export default function AdminAuth() {
   const navigate = useNavigate();
-  const { isLoaded: authLoaded, isSignedIn, userId } = useAuth();
+  const { isLoaded: authLoaded, isSignedIn } = useAuth();
   const { signUp, setActive: setSignUpActive, isLoaded: signUpLoaded } = useSignUp();
   const { signIn, setActive: setSignInActive, isLoaded: signInLoaded } = useSignIn();
 
@@ -436,16 +436,20 @@ export default function AdminAuth() {
 
   useEffect(() => () => clearTimeout(toastTimer.current), []);
 
-  // Sends a fresh email code to verify this browser and shows the device
-  // verification screen. Guards against double-sending on re-renders.
+  // Sends a fresh server-verified email code to verify this browser and
+  // shows the device verification screen. Only enters deviceVerifying mode
+  // once the code has actually been sent — a failure shows a toast and
+  // leaves the user where they were instead of stranding them on a code
+  // screen with no code ever sent. Guards against double-sending on
+  // re-renders/effects firing more than once.
   const beginDeviceVerification = async () => {
-    setDeviceVerifying(true);
-    if (deviceCodeSentRef.current) return;
-    deviceCodeSentRef.current = true;
+    if (deviceCodeSentRef.current) { setDeviceVerifying(true); return; }
     try {
-      await window.Clerk?.user?.primaryEmailAddress?.prepareVerification({ strategy: 'email_code' });
+      await requestDeviceCode();
+      deviceCodeSentRef.current = true;
+      setDeviceVerifying(true);
     } catch (err) {
-      showToast(err.errors?.[0]?.message ?? err.message);
+      showToast(err.message ?? 'Could not send verification code');
     }
   };
 
@@ -456,16 +460,19 @@ export default function AdminAuth() {
   useEffect(() => {
     if (!authLoaded || !isSignedIn) return;
     let cancelled = false;
-    supabase.rpc('is_admin').then(({ data, error }) => {
+    (async () => {
+      const { data, error } = await supabase.rpc('is_admin');
       if (cancelled || error || data !== true) return;
-      if (isDeviceTrusted(userId)) {
+      const trusted = await isDeviceTrusted();
+      if (cancelled) return;
+      if (trusted) {
         navigate('/admin/dashboard', { replace: true });
       } else {
         beginDeviceVerification();
       }
-    });
+    })();
     return () => { cancelled = true; };
-  }, [authLoaded, isSignedIn, userId, navigate]);
+  }, [authLoaded, isSignedIn, navigate]);
 
   const switchMode = (next) => {
     setMode(next);
@@ -543,7 +550,8 @@ export default function AdminAuth() {
         const result = await signIn.create({ identifier: email, password });
         if (result.status === 'complete') {
           await setSignInActive({ session: result.createdSessionId });
-          if (isDeviceTrusted(window.Clerk?.user?.id)) {
+          const trusted = await isDeviceTrusted();
+          if (trusted) {
             navigate('/admin/dashboard');
           } else {
             await beginDeviceVerification();
@@ -583,9 +591,16 @@ export default function AdminAuth() {
       });
       if (result.status === 'complete') {
         await setSignInActive({ session: result.createdSessionId });
-        // The reset code already proved control of the inbox on this device.
-        trustDevice(window.Clerk?.user?.id);
-        navigate('/admin/dashboard');
+        // Clerk's reset code proves the account owner controls the inbox,
+        // but trusting *this device* still goes through our own
+        // server-verified check (trust is only ever written by the
+        // device-verify-confirm Edge Function).
+        const trusted = await isDeviceTrusted();
+        if (trusted) {
+          navigate('/admin/dashboard');
+        } else {
+          await beginDeviceVerification();
+        }
       } else {
         showToast('Reset incomplete — please try again');
       }
@@ -610,9 +625,10 @@ export default function AdminAuth() {
           showToast('Verified, but profile setup failed: ' + profileErr.message);
           return;
         }
-        // This code already proved control of the inbox on this device.
-        trustDevice(result.createdUserId);
-        navigate('/admin/dashboard');
+        // Clerk's signup code proves the account owner controls the inbox,
+        // but this device still needs the same server-verified check as
+        // every other new device before we consider it trusted.
+        await beginDeviceVerification();
       } else {
         showToast('Verification incomplete — please try again');
       }
@@ -638,13 +654,10 @@ export default function AdminAuth() {
     if (!deviceCode.trim() || loading) return;
     setLoading(true);
     try {
-      const emailAddr = window.Clerk?.user?.primaryEmailAddress;
-      if (!emailAddr) throw new Error('No email address found on this account');
-      await emailAddr.attemptVerification({ code: deviceCode });
-      trustDevice(window.Clerk.user.id);
+      await confirmDeviceCode(deviceCode);
       navigate('/admin/dashboard');
     } catch (err) {
-      showToast(err.errors?.[0]?.longMessage ?? err.errors?.[0]?.message ?? err.message);
+      showToast(err.message ?? 'Verification failed');
     } finally {
       setLoading(false);
     }
@@ -652,10 +665,10 @@ export default function AdminAuth() {
 
   const handleResendDeviceCode = async () => {
     try {
-      await window.Clerk?.user?.primaryEmailAddress?.prepareVerification({ strategy: 'email_code' });
+      await requestDeviceCode();
       showToast('New code sent to your email');
     } catch (err) {
-      showToast(err.errors?.[0]?.message ?? err.message);
+      showToast(err.message ?? 'Could not resend code');
     }
   };
 
