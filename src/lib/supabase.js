@@ -8,8 +8,10 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   accessToken: async () => {
     // window.Clerk is set by ClerkProvider before any query runs.
     // Falls back to null (anon) if Clerk isn't loaded yet or user is signed out.
+    // Uses Clerk's default session token (native Supabase third-party auth
+    // integration) — no custom JWT template needed.
     const session = window.Clerk?.session;
     if (!session) return null;
-    return session.getToken({ template: 'supabase' });
+    return session.getToken();
   },
 });

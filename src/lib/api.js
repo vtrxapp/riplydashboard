@@ -1,13 +1,14 @@
 import { supabase } from './supabase';
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
+// Identity now comes from Clerk, not Supabase Auth. Callers pass the Clerk
+// userId in (e.g. from useAuth()/useUser()) rather than us reading it here.
 
-export const signOut = () => supabase.auth.signOut();
+export const signOut = () => window.Clerk?.signOut();
 
-export const getCurrentUser = async () => {
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return null;
-  const { data } = await supabase.from('users').select('*').eq('id', user.id).single();
+export const getCurrentUser = async (userId) => {
+  if (!userId) return null;
+  const { data } = await supabase.from('users').select('*').eq('id', userId).single();
   return data;
 };
 
@@ -42,11 +43,10 @@ export const fetchEvents = async (status = null) => {
   return data ?? [];
 };
 
-export const createEvent = async (payload) => {
-  const { data: { user } } = await supabase.auth.getUser();
+export const createEvent = async (payload, userId) => {
   const { data, error } = await supabase
     .from('events')
-    .insert({ ...payload, created_by: user?.id, status: 'pending' })
+    .insert({ ...payload, created_by: userId, status: 'pending' })
     .select()
     .single();
   if (error) throw error;
@@ -107,11 +107,10 @@ export const fetchMessages = async (chatId) => {
   return data ?? [];
 };
 
-export const sendMessage = async (chatId, content) => {
-  const { data: { user } } = await supabase.auth.getUser();
+export const sendMessage = async (chatId, content, userId) => {
   const { data, error } = await supabase
     .from('messages')
-    .insert({ chat_id: chatId, sender_id: user?.id, content })
+    .insert({ chat_id: chatId, sender_id: userId, content })
     .select()
     .single();
   if (error) throw error;
@@ -138,13 +137,12 @@ export const subscribeToMessages = (chatId, callback) =>
 
 // ── Notifications ─────────────────────────────────────────────────────────────
 
-export const fetchNotifications = async () => {
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return [];
+export const fetchNotifications = async (userId) => {
+  if (!userId) return [];
   const { data, error } = await supabase
     .from('notifications')
     .select('id, user_id, title, body, read, created_at, type, kind')
-    .eq('user_id', user.id)
+    .eq('user_id', userId)
     .order('created_at', { ascending: false })
     .limit(20);
   if (error) throw error;
@@ -154,10 +152,9 @@ export const fetchNotifications = async () => {
   }));
 };
 
-export const markAllNotificationsRead = async () => {
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return;
-  await supabase.from('notifications').update({ read: true }).eq('user_id', user.id);
+export const markAllNotificationsRead = async (userId) => {
+  if (!userId) return;
+  await supabase.from('notifications').update({ read: true }).eq('user_id', userId);
 };
 
 // ── Funnel stats ──────────────────────────────────────────────────────────────
