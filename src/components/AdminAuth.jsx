@@ -389,6 +389,16 @@ const UNIVERSITIES = [
 
 const ROLES = ['Club Organizer', 'Department Staff', 'UMSU Administrator'];
 
+// This Clerk instance (shared with the mobile app) requires a username on
+// sign-up, but our admin form has no username field for the user to fill in.
+// Derive one from the email instead — it's never shown or used as a login
+// identifier here, just a value that satisfies Clerk's required field.
+function generateUsername(email) {
+  const base = (email.split('@')[0] || 'admin').replace(/[^a-zA-Z0-9_]/g, '').slice(0, 20) || 'admin';
+  const suffix = Math.random().toString(36).slice(2, 8);
+  return `${base}_${suffix}`;
+}
+
 export default function AdminAuth() {
   const navigate = useNavigate();
   const { isLoaded: authLoaded, isSignedIn } = useAuth();
@@ -518,6 +528,7 @@ export default function AdminAuth() {
         const result = await signUp.create({
           emailAddress: email,
           password,
+          username: generateUsername(email),
           unsafeMetadata: { name, university, campus, role },
         });
 
