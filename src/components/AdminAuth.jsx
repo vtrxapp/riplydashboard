@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useSignUp, useSignIn, useAuth } from '@clerk/clerk-react';
 import { supabase } from '../lib/supabase';
 
 // ─── Inline SVG icons ────────────────────────────────────────────────────────
@@ -389,8 +390,17 @@ const ROLES = ['Club Organizer', 'Department Staff', 'UMSU Administrator'];
 
 export default function AdminAuth() {
   const navigate = useNavigate();
+  const { isLoaded: authLoaded, isSignedIn } = useAuth();
+  const { signUp, setActive: setSignUpActive, isLoaded: signUpLoaded } = useSignUp();
+  const { signIn, setActive: setSignInActive, isLoaded: signInLoaded } = useSignIn();
 
   const [mode, setMode] = useState('signup'); // 'signup' | 'login'
+  const [verifying, setVerifying] = useState(false); // email verification step
+  const [verifyCode, setVerifyCode] = useState('');
+  const [resetting, setResetting] = useState(false); // password reset step
+  const [resetCode, setResetCode] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [showNewPw, setShowNewPw] = useState(false);
   const [loading, setLoading] = useState(false);
 
   // Shared fields
@@ -422,18 +432,46 @@ export default function AdminAuth() {
 
   useEffect(() => () => clearTimeout(toastTimer.current), []);
 
-  // Redirect if already logged in
+  // Redirect if already signed in *and* an admin — otherwise leave them here
+  // (avoids a bounce loop with PrivateRoute's admin check).
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      if (data.session) navigate('/admin/dashboard', { replace: true });
+    if (!authLoaded || !isSignedIn) return;
+    let cancelled = false;
+    supabase.rpc('is_admin').then(({ data, error }) => {
+      if (!cancelled && !error && data === true) {
+        navigate('/admin/dashboard', { replace: true });
+      }
     });
-  }, [navigate]);
+    return () => { cancelled = true; };
+  }, [authLoaded, isSignedIn, navigate]);
 
   const switchMode = (next) => {
     setMode(next);
     setUniOpen(false);
     setRoleOpen(false);
     setShowPw(false);
+  };
+
+  // Creates the public.users + admin_profiles rows for a freshly-authenticated
+  // Clerk user. Throws on failure so callers can block navigation.
+  const provisionAdminProfile = async (userId) => {
+    const { error: userErr } = await supabase.from('users').upsert({
+      id: userId,
+      email,
+      name,
+      university,
+      campus,
+      role: 'admin',
+    }, { onConflict: 'id' });
+    if (userErr) throw userErr;
+
+    const { error: profileErr } = await supabase.from('admin_profiles').upsert({
+      user_id: userId,
+      university,
+      campus,
+      role,
+    }, { onConflict: 'user_id' });
+    if (profileErr) throw profileErr;
   };
 
   const handleSubmit = async (e) => {
@@ -444,37 +482,124 @@ export default function AdminAuth() {
       if (!university) { showToast('Please select your university'); return; }
       if (!name.trim()) { showToast('Please enter your full name'); return; }
       if (!terms) { showToast('Please accept the Terms to continue'); return; }
+      if (!signUpLoaded) return;
 
       setLoading(true);
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: { data: { name, university, campus, role } },
-      });
-      setLoading(false);
+      try {
+        const result = await signUp.create({
+          emailAddress: email,
+          password,
+          firstName: name,
+          unsafeMetadata: { university, campus, role },
+        });
 
-      if (error) { showToast(error.message); return; }
-
-      // The handle_new_user() DB trigger creates the profile row automatically.
-      // TEMP: navigate straight to the dashboard for preview purposes, even
-      // without a confirmed session. Restore the session check before shipping.
-      showToast('Account created! Signing you in…');
-      navigate('/admin/dashboard');
+        if (result.status === 'complete') {
+          await setSignUpActive({ session: result.createdSessionId });
+          try {
+            await provisionAdminProfile(result.createdUserId);
+          } catch (profileErr) {
+            showToast('Signed in, but profile setup failed: ' + profileErr.message);
+            return;
+          }
+          showToast('Account created! Signing you in…');
+          navigate('/admin/dashboard');
+        } else {
+          // Email verification required — send code and show verification screen
+          await signUp.prepareEmailAddressVerification({ strategy: 'email_code' });
+          setVerifying(true);
+        }
+      } catch (err) {
+        showToast(err.errors?.[0]?.longMessage ?? err.errors?.[0]?.message ?? err.message);
+      } finally {
+        setLoading(false);
+      }
     } else {
+      if (!signInLoaded) return;
       setLoading(true);
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-      setLoading(false);
-
-      if (error) { showToast(error.message); return; }
-      navigate('/admin/dashboard');
+      try {
+        const result = await signIn.create({ identifier: email, password });
+        if (result.status === 'complete') {
+          await setSignInActive({ session: result.createdSessionId });
+          navigate('/admin/dashboard');
+        } else {
+          showToast('Additional verification required');
+        }
+      } catch (err) {
+        showToast(err.errors?.[0]?.longMessage ?? err.errors?.[0]?.message ?? err.message);
+      } finally {
+        setLoading(false);
+      }
     }
   };
 
   const handleForgot = async () => {
     if (!email) { showToast('Enter your email above first'); return; }
-    const { error } = await supabase.auth.resetPasswordForEmail(email);
-    if (error) { showToast(error.message); return; }
-    showToast('Password reset link sent to your email');
+    if (!signInLoaded) return;
+    try {
+      await signIn.create({ strategy: 'reset_password_email_code', identifier: email });
+      showToast('Password reset code sent to your email');
+      setResetting(true);
+    } catch (err) {
+      showToast(err.errors?.[0]?.longMessage ?? err.errors?.[0]?.message ?? err.message);
+    }
+  };
+
+  const handleResetPassword = async (e) => {
+    e.preventDefault();
+    if (!resetCode.trim() || !newPassword || loading || !signInLoaded) return;
+    setLoading(true);
+    try {
+      const result = await signIn.attemptFirstFactor({
+        strategy: 'reset_password_email_code',
+        code: resetCode,
+        password: newPassword,
+      });
+      if (result.status === 'complete') {
+        await setSignInActive({ session: result.createdSessionId });
+        navigate('/admin/dashboard');
+      } else {
+        showToast('Reset incomplete — please try again');
+      }
+    } catch (err) {
+      showToast(err.errors?.[0]?.longMessage ?? err.errors?.[0]?.message ?? err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerify = async (e) => {
+    e.preventDefault();
+    if (!verifyCode.trim() || loading) return;
+    setLoading(true);
+    try {
+      const result = await signUp.attemptEmailAddressVerification({ code: verifyCode });
+      if (result.status === 'complete') {
+        await setSignUpActive({ session: result.createdSessionId });
+        try {
+          await provisionAdminProfile(result.createdUserId);
+        } catch (profileErr) {
+          showToast('Verified, but profile setup failed: ' + profileErr.message);
+          return;
+        }
+        navigate('/admin/dashboard');
+      } else {
+        showToast('Verification incomplete — please try again');
+      }
+    } catch (err) {
+      showToast(err.errors?.[0]?.longMessage ?? err.errors?.[0]?.message ?? err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResendCode = async () => {
+    if (!signUpLoaded) return;
+    try {
+      await signUp.prepareEmailAddressVerification({ strategy: 'email_code' });
+      showToast('New code sent to your email');
+    } catch (err) {
+      showToast(err.errors?.[0]?.message ?? err.message);
+    }
   };
 
   const handleSSO = () => showToast('University SSO coming soon');
@@ -511,13 +636,169 @@ export default function AdminAuth() {
       }}>
         <BrandPanel />
 
-        {/* ── Right form panel ── */}
+        {/* ── Right panel ── */}
         <div style={{
           flex: 1, minWidth: 0,
           display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
           overflowY: 'auto', padding: '48px 40px', boxSizing: 'border-box',
         }}>
           <div style={{ width: '100%', maxWidth: 440, margin: 'auto' }}>
+
+          {/* ── Password reset screen ── */}
+          {resetting ? (
+            <>
+              <div style={{ textAlign: 'center', marginBottom: 32 }}>
+                <div style={{
+                  width: 64, height: 64, borderRadius: '50%', margin: '0 auto 20px',
+                  background: 'linear-gradient(135deg,#19BFFF,#0E84E0)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <IconLock />
+                </div>
+                <div style={{ fontSize: 27, fontWeight: 800, letterSpacing: -0.6 }}>Reset your password</div>
+                <div style={{ fontSize: 14, color: '#7B8499', marginTop: 8 }}>
+                  Enter the code sent to <strong style={{ color: '#1A2233' }}>{email}</strong> and choose a new password
+                </div>
+              </div>
+
+              <form onSubmit={handleResetPassword} style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+                <FormField label="Reset code">
+                  <InputRow>
+                    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0 }}>
+                      <rect x="4.5" y="10.5" width="15" height="9.5" rx="2.5" stroke="#9AA3B2" strokeWidth="1.9" />
+                      <path d="M8 10.5V8a4 4 0 0 1 8 0v2.5" stroke="#9AA3B2" strokeWidth="1.9" strokeLinecap="round" />
+                    </svg>
+                    <input
+                      value={resetCode}
+                      onChange={e => setResetCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      placeholder="000000"
+                      inputMode="numeric"
+                      maxLength={6}
+                      style={{
+                        flex: 1, border: 'none', background: 'none',
+                        fontSize: 22, fontWeight: 700, color: '#1A2233',
+                        letterSpacing: 6, outline: 'none', fontFamily: 'inherit',
+                      }}
+                    />
+                  </InputRow>
+                </FormField>
+
+                <FormField label="New password">
+                  <PasswordInput
+                    value={newPassword}
+                    onChange={e => setNewPassword(e.target.value)}
+                    placeholder="Enter a new password"
+                    showPw={showNewPw}
+                    onToggle={() => setShowNewPw(v => !v)}
+                  />
+                </FormField>
+
+                <button
+                  type="submit"
+                  disabled={loading || resetCode.length < 6 || !newPassword}
+                  style={{
+                    width: '100%', height: 54, border: 'none', borderRadius: 15,
+                    background: (loading || resetCode.length < 6 || !newPassword) ? '#9AA3B2' : 'linear-gradient(135deg,#19BFFF,#0E84E0)',
+                    color: '#fff', fontSize: 16, fontWeight: 800,
+                    cursor: (loading || resetCode.length < 6 || !newPassword) ? 'not-allowed' : 'pointer',
+                    fontFamily: 'inherit',
+                    boxShadow: (loading || resetCode.length < 6 || !newPassword) ? 'none' : '0 8px 22px rgba(2,162,240,0.4)',
+                    marginTop: 2,
+                  }}
+                >
+                  {loading ? 'Resetting…' : 'Reset password & sign in'}
+                </button>
+              </form>
+
+              <div style={{ textAlign: 'center', marginTop: 24, fontSize: 13, color: '#7B8499' }}>
+                <button
+                  type="button"
+                  onClick={() => { setResetting(false); setResetCode(''); setNewPassword(''); }}
+                  style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', color: '#0098F0', fontWeight: 700, cursor: 'pointer' }}
+                >
+                  Back to sign in
+                </button>
+              </div>
+            </>
+          ) : verifying ? (
+            <>
+              <div style={{ textAlign: 'center', marginBottom: 32 }}>
+                <div style={{
+                  width: 64, height: 64, borderRadius: '50%', margin: '0 auto 20px',
+                  background: 'linear-gradient(135deg,#19BFFF,#0E84E0)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
+                    <rect x="3.5" y="5.5" width="17" height="13" rx="3" stroke="#fff" strokeWidth="1.9" />
+                    <path d="m4.5 7 7.5 5.5L19.5 7" stroke="#fff" strokeWidth="1.9" strokeLinejoin="round" />
+                  </svg>
+                </div>
+                <div style={{ fontSize: 27, fontWeight: 800, letterSpacing: -0.6 }}>Check your email</div>
+                <div style={{ fontSize: 14, color: '#7B8499', marginTop: 8 }}>
+                  We sent a 6-digit code to <strong style={{ color: '#1A2233' }}>{email}</strong>
+                </div>
+              </div>
+
+              <form onSubmit={handleVerify} style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+                <FormField label="Verification code">
+                  <InputRow>
+                    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0 }}>
+                      <rect x="4.5" y="10.5" width="15" height="9.5" rx="2.5" stroke="#9AA3B2" strokeWidth="1.9" />
+                      <path d="M8 10.5V8a4 4 0 0 1 8 0v2.5" stroke="#9AA3B2" strokeWidth="1.9" strokeLinecap="round" />
+                    </svg>
+                    <input
+                      value={verifyCode}
+                      onChange={e => setVerifyCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      placeholder="000000"
+                      inputMode="numeric"
+                      maxLength={6}
+                      style={{
+                        flex: 1, border: 'none', background: 'none',
+                        fontSize: 22, fontWeight: 700, color: '#1A2233',
+                        letterSpacing: 6, outline: 'none', fontFamily: 'inherit',
+                      }}
+                    />
+                  </InputRow>
+                </FormField>
+
+                <button
+                  type="submit"
+                  disabled={loading || verifyCode.length < 6}
+                  style={{
+                    width: '100%', height: 54, border: 'none', borderRadius: 15,
+                    background: (loading || verifyCode.length < 6) ? '#9AA3B2' : 'linear-gradient(135deg,#19BFFF,#0E84E0)',
+                    color: '#fff', fontSize: 16, fontWeight: 800,
+                    cursor: (loading || verifyCode.length < 6) ? 'not-allowed' : 'pointer',
+                    fontFamily: 'inherit',
+                    boxShadow: (loading || verifyCode.length < 6) ? 'none' : '0 8px 22px rgba(2,162,240,0.4)',
+                    marginTop: 2,
+                  }}
+                >
+                  {loading ? 'Verifying…' : 'Verify & continue'}
+                </button>
+              </form>
+
+              <div style={{ textAlign: 'center', marginTop: 24, fontSize: 13, color: '#7B8499' }}>
+                Didn't receive it?{' '}
+                <button
+                  type="button"
+                  onClick={handleResendCode}
+                  style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', color: '#0098F0', fontWeight: 700, cursor: 'pointer' }}
+                >
+                  Resend code
+                </button>
+                {' · '}
+                <button
+                  type="button"
+                  onClick={() => { setVerifying(false); setVerifyCode(''); }}
+                  style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', color: '#0098F0', fontWeight: 700, cursor: 'pointer' }}
+                >
+                  Go back
+                </button>
+              </div>
+            </>
+          ) : (
+          <>
 
             {/* Segmented mode toggle */}
             <div style={{
@@ -699,6 +980,7 @@ export default function AdminAuth() {
                 {isSignup ? 'Sign in' : 'Create account'}
               </span>
             </div>
+          </>) /* end of !verifying else */}
           </div>
         </div>
       </div>

@@ -1,38 +1,33 @@
-import { createContext, useContext, useEffect, useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useAuth as useClerkAuth } from '@clerk/clerk-react';
 import { Navigate } from 'react-router-dom';
 import { supabase } from './supabase';
 
-const AuthContext = createContext(null);
-
-export function AuthProvider({ children }) {
-  const [session, setSession] = useState(undefined); // undefined = loading
-
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data.session));
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_, s) => setSession(s));
-    return () => subscription.unsubscribe();
-  }, []);
-
-  return <AuthContext.Provider value={{ session }}>{children}</AuthContext.Provider>;
-}
-
-export function useAuth() {
-  return useContext(AuthContext);
-}
-
-// TEMP: auth bypass so the dashboard can be previewed without a confirmed
-// session. Restore the session check below before shipping this.
-const BYPASS_AUTH = true;
+const LOADING_STYLE = {
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+  height: '100vh', fontFamily: 'Montserrat', color: '#7B8499',
+};
 
 export function PrivateRoute({ children }) {
-  const { session } = useAuth();
-  if (BYPASS_AUTH) return children;
-  if (session === undefined) {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', fontFamily: 'Montserrat', color: '#7B8499' }}>
-        Loading…
-      </div>
-    );
+  const { isLoaded, isSignedIn } = useClerkAuth();
+  const [isAdmin, setIsAdmin] = useState(undefined); // undefined = checking
+
+  useEffect(() => {
+    if (!isLoaded) return;
+    if (!isSignedIn) { setIsAdmin(false); return; }
+
+    let cancelled = false;
+    setIsAdmin(undefined);
+    supabase.rpc('is_admin').then(({ data, error }) => {
+      if (cancelled) return;
+      setIsAdmin(!error && data === true);
+    });
+    return () => { cancelled = true; };
+  }, [isLoaded, isSignedIn]);
+
+  if (!isLoaded || isAdmin === undefined) {
+    return <div style={LOADING_STYLE}>Loading…</div>;
   }
-  return session ? children : <Navigate to="/admin/auth" replace />;
+
+  return isAdmin ? children : <Navigate to="/admin/auth" replace />;
 }

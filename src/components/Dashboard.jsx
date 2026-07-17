@@ -11,6 +11,7 @@ import {
   signOut,
 } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
+import { useAuth as useClerkAuth } from '@clerk/clerk-react';
 
 function svgUri(svg, color) {
   const s = svg.split('"C"').join('"' + color + '"')
@@ -1341,6 +1342,7 @@ function CreateEventView({ ceCat, setCeCat, ceTitle, setCeTitle, ceAbout, setCeA
 // ── Main Dashboard ─────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const navigate = useNavigate();
+  const { userId } = useClerkAuth();
 
   // ── UI state ───────────────────────────────────────────────────────────────
   const [nav, setNav] = useState('overview');
@@ -1415,7 +1417,7 @@ export default function Dashboard() {
         fetchFunnelStats().catch(() => null),
         fetchPendingEvents().catch(() => []),
         fetchRecentReviews().catch(() => []),
-        fetchNotifications().catch(() => []),
+        fetchNotifications(userId).catch(() => []),
       ]);
       if (cancelled) return;
       setKpis(kpisData);
@@ -1480,7 +1482,7 @@ export default function Dashboard() {
     const text = msgDraft.trim();
     if (!text || !activeChat) return;
     setMsgDraft('');
-    const msg = await sendMessage(activeChat.id, text).catch(err => {
+    const msg = await sendMessage(activeChat.id, text, userId).catch(err => {
       showToast('Failed to send: ' + err.message);
       return null;
     });
@@ -1497,7 +1499,7 @@ export default function Dashboard() {
         full_date: ceDate, start_time: ceStart, time_range: `${ceStart} – ${ceEnd}`,
         venue: ceVenue, price: cePricing === 'free' ? 'Free' : `$${cePrice}`,
         capacity: ceCapacity,
-      });
+      }, userId);
       showToast('Event submitted for approval!');
       setCeTitle(''); setCeAbout(''); setCeDate(''); setCeStart(''); setCeEnd(''); setCeVenue(''); setCeCapacity(500);
       fetchPendingEvents().then(setPendingEvents).catch(() => {});
@@ -1510,8 +1512,12 @@ export default function Dashboard() {
 
   // ── Mark notifications read ────────────────────────────────────────────────
   const handleMarkNotifsRead = async () => {
-    setNotifsRead(true);
-    await markAllNotificationsRead().catch(() => {});
+    try {
+      await markAllNotificationsRead(userId);
+      setNotifsRead(true);
+    } catch {
+      // leave notifsRead as-is so the unread state is preserved
+    }
   };
 
   // ── Sign out ───────────────────────────────────────────────────────────────

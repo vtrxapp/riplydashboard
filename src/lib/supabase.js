@@ -4,4 +4,14 @@ const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL ?? 'https://mhraqpmlvviyr
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
   ?? 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1ocmFxcG1sdnZpeXJra3FkeGNkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIzNDA4MzUsImV4cCI6MjA5NzkxNjgzNX0.af-sbDaKDcoxQ_SEgEeEJiJJaasdSEsams0t3e6pCrE';
 
-export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  accessToken: async () => {
+    // window.Clerk is set by ClerkProvider before any query runs.
+    // Falls back to null (anon) if Clerk isn't loaded yet or user is signed out.
+    // Uses Clerk's default session token (native Supabase third-party auth
+    // integration) — no custom JWT template needed.
+    const session = window.Clerk?.session;
+    if (!session) return null;
+    return session.getToken();
+  },
+});
