@@ -32,13 +32,6 @@ function getUserIdFromAuthHeader(req: Request): string | null {
   }
 }
 
-async function hashCode(code: string, userId: string, deviceToken: string) {
-  const enc = new TextEncoder();
-  const data = enc.encode(`${code}:${userId}:${deviceToken}`);
-  const digest = await crypto.subtle.digest("SHA-256", data);
-  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
 function generateCode(): string {
   const buf = new Uint32Array(1);
   crypto.getRandomValues(buf);
@@ -113,22 +106,21 @@ Deno.serve(async (req: Request) => {
   }
 
   const code = generateCode();
-  const codeHash = await hashCode(code, userId, deviceToken);
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 
-  // Invoke as the caller (forwarding their own JWT) so auth.uid() inside the
-  // function matches, and the advisory lock + cooldown check run atomically
-  // — this is what actually rate-limits/serializes issuance, not app code.
-  const supabaseUser = createClient(
+  // request_device_code/confirm_device_code are service_role-only (see
+  // migration 0004) and hash the code themselves — the browser never has a
+  // way to compute or supply a hash directly, closing the "call the RPC
+  // with a self-chosen hash" bypass. userId here comes from our own JWT
+  // parsing above, not from anything the client could override in the body.
+  const supabaseAdmin = createClient(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_ANON_KEY")!,
-    { global: { headers: { Authorization: req.headers.get("Authorization")! } } },
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   );
 
-  const { data: allowed, error: rpcError } = await supabaseUser.rpc("request_device_code", {
+  const { data: allowed, error: rpcError } = await supabaseAdmin.rpc("request_device_code", {
+    p_user_id: userId,
     p_device_token: deviceToken,
-    p_code_hash: codeHash,
-    p_expires_at: expiresAt,
+    p_code: code,
   });
   if (rpcError) return json({ error: rpcError.message }, 500);
   if (!allowed) {

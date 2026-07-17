@@ -28,13 +28,6 @@ function getUserIdFromAuthHeader(req: Request): string | null {
   }
 }
 
-async function hashCode(code: string, userId: string, deviceToken: string) {
-  const enc = new TextEncoder();
-  const data = enc.encode(`${code}:${userId}:${deviceToken}`);
-  const digest = await crypto.subtle.digest("SHA-256", data);
-  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS_HEADERS });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
@@ -54,21 +47,19 @@ Deno.serve(async (req: Request) => {
     return json({ error: "device_token and code are required" }, 400);
   }
 
-  const codeHash = await hashCode(code, userId, deviceToken);
-
-  // Invoke as the caller so auth.uid() inside the function matches — the
-  // function does the compare/consume/trust-write atomically under a row
-  // lock, so concurrent guesses can't defeat the attempt limit and a failed
-  // trust insert can't happen after the code was already consumed.
-  const supabaseUser = createClient(
+  // confirm_device_code is service_role-only and hashes+compares the
+  // submitted code itself — the client only ever supplies the plaintext
+  // code it received by email, never anything that could substitute for
+  // server-side verification.
+  const supabaseAdmin = createClient(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_ANON_KEY")!,
-    { global: { headers: { Authorization: req.headers.get("Authorization")! } } },
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   );
 
-  const { data: outcome, error: rpcError } = await supabaseUser.rpc("confirm_device_code", {
+  const { data: outcome, error: rpcError } = await supabaseAdmin.rpc("confirm_device_code", {
+    p_user_id: userId,
     p_device_token: deviceToken,
-    p_code_hash: codeHash,
+    p_code: code,
   });
   if (rpcError) return json({ error: rpcError.message }, 500);
 
