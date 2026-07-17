@@ -1512,8 +1512,12 @@ export default function Dashboard() {
 
   // ── Mark notifications read ────────────────────────────────────────────────
   const handleMarkNotifsRead = async () => {
-    setNotifsRead(true);
-    await markAllNotificationsRead(userId).catch(() => {});
+    try {
+      await markAllNotificationsRead(userId);
+      setNotifsRead(true);
+    } catch {
+      // leave notifsRead as-is so the unread state is preserved
+    }
   };
 
   // ── Sign out ───────────────────────────────────────────────────────────────

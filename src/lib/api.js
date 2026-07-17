@@ -154,7 +154,8 @@ export const fetchNotifications = async (userId) => {
 
 export const markAllNotificationsRead = async (userId) => {
   if (!userId) return;
-  await supabase.from('notifications').update({ read: true }).eq('user_id', userId);
+  const { error } = await supabase.from('notifications').update({ read: true }).eq('user_id', userId);
+  if (error) throw error;
 };
 
 // ── Funnel stats ──────────────────────────────────────────────────────────────
