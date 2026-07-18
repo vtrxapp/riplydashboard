@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { createRemoteJWKSet, jwtVerify } from "npm:jose@5";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -14,14 +15,18 @@ function json(body: unknown, status = 200) {
   });
 }
 
-function getUserIdFromAuthHeader(req: Request): string | null {
+// See device-verify-request for why this function verifies the Clerk JWT
+// itself instead of relying on Supabase's gateway verify_jwt (which doesn't
+// understand third-party JWKS trust and would 401 every real request).
+const CLERK_ISSUER = "https://fit-turkey-96.clerk.accounts.dev";
+const CLERK_JWKS = createRemoteJWKSet(new URL(`${CLERK_ISSUER}/.well-known/jwks.json`));
+
+async function getUserIdFromAuthHeader(req: Request): Promise<string | null> {
   const auth = req.headers.get("Authorization") ?? "";
   const token = auth.replace(/^Bearer\s+/i, "");
   if (!token) return null;
-  const parts = token.split(".");
-  if (parts.length !== 3) return null;
   try {
-    const payload = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/")));
+    const { payload } = await jwtVerify(token, CLERK_JWKS, { issuer: CLERK_ISSUER });
     return typeof payload.sub === "string" ? payload.sub : null;
   } catch {
     return null;
@@ -36,7 +41,7 @@ Deno.serve(async (req: Request) => {
   // here would produce a bare 500 with no CORS headers, which browsers
   // surface as an opaque "Failed to fetch" instead of the real message.
   try {
-    const userId = getUserIdFromAuthHeader(req);
+    const userId = await getUserIdFromAuthHeader(req);
     if (!userId) return json({ error: "Unauthorized" }, 401);
 
     let body: { device_token?: string; code?: string };
