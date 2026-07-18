@@ -256,7 +256,7 @@ function KpiCard({ label, value, delta, pos, iconBg, iconSvg, iconColor, spark }
         <div style={{ width: 40, height: 40, borderRadius: 12, background: iconBg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div style={iconSt(iconSvg, iconColor, 20)}/>
         </div>
-        <DeltaBadge pos={pos} delta={delta}/>
+        {delta && <DeltaBadge pos={pos} delta={delta}/>}
       </div>
       <div style={{ fontSize: 29, fontWeight: 800, letterSpacing: -1, marginTop: 14 }}>{value}</div>
       <div style={{ fontSize: 13.5, fontWeight: 600, color: '#7B8499', marginTop: 2 }}>{label}</div>
@@ -266,32 +266,39 @@ function KpiCard({ label, value, delta, pos, iconBg, iconSvg, iconColor, spark }
 }
 
 // ── Overview view ─────────────────────────────────────────────────────────────
-function OverviewView({ tick, theme, onViewAllEvents, kpis, events, liveEvents }) {
+function OverviewView({ tick, theme, onViewAllEvents, kpis, events, liveEvents, funnelStats }) {
   const fmt = n => n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'K' : String(n ?? 0);
+  // No historical snapshots exist yet to compute real period-over-period
+  // deltas or sparklines from, so those are omitted rather than faked.
   const kpiDefs = [
-    { label: 'Total Users',      value: fmt(kpis?.totalUsers),   delta: '+12.4%', pos: true,  iconBg: '#E9F6FF', color: '#0098F0', icon: NAV_ITEMS[4].icon, spark: [180,200,190,220,240,235,255,270] },
-    { label: 'Events Published', value: fmt(kpis?.totalEvents),  delta: '+8.1%',  pos: true,  iconBg: '#F1ECFF', color: '#7C5CFF', icon: NAV_ITEMS[1].icon, spark: [20,22,28,26,33,38,42,48] },
-    { label: 'Total RSVPs',      value: fmt(kpis?.totalRsvps),   delta: '+15.2%', pos: true,  iconBg: '#E4F7EC', color: '#15A34A', icon: ACT_ICONS.ticket.svg, spark: [60,75,72,90,110,130,150,182] },
-    { label: 'Tickets Sold',     value: fmt(kpis?.totalTickets), delta: '+23.6%', pos: true,  iconBg: '#FFF6EC', color: '#F59E0B', icon: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4 4L19 7" stroke="C" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>', spark: [80,78,82,79,76,77,74,73] },
+    { label: 'Total Users',      value: fmt(kpis?.totalUsers),   iconBg: '#E9F6FF', color: '#0098F0', icon: NAV_ITEMS[4].icon },
+    { label: 'Events Published', value: fmt(kpis?.totalEvents),  iconBg: '#F1ECFF', color: '#7C5CFF', icon: NAV_ITEMS[1].icon },
+    { label: 'Total RSVPs',      value: fmt(kpis?.totalRsvps),   iconBg: '#E4F7EC', color: '#15A34A', icon: ACT_ICONS.ticket.svg },
+    { label: 'Tickets Sold',     value: fmt(kpis?.totalTickets), iconBg: '#FFF6EC', color: '#F59E0B', icon: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4 4L19 7" stroke="C" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>' },
   ];
   const catColors = { social:'linear-gradient(135deg,#FF5A8A,#FF8A3D)', career:'linear-gradient(135deg,#2F6BFF,#6C4DF2)', academic:'linear-gradient(135deg,#7C5CFF,#B06BFF)', sports:'linear-gradient(135deg,#10B981,#06B6D4)', festival:'linear-gradient(135deg,#FF6B6B,#FFB347)' };
   const topEvents = (events.length ? events : []).slice(0, 5);
-  const totalRsvps = kpis?.totalRsvps || 1;
-  const totalTickets = kpis?.totalTickets || 0;
+  // Real numbers only — no "attended" stage since there's no data source
+  // for it (RSVPs/tickets don't track actual attendance), and no fabricated
+  // conversion percentages when the denominator is zero.
+  const views = funnelStats?.totalViews || 0;
+  const rsvps = funnelStats?.totalRsvps || 0;
+  const tickets = funnelStats?.totalTickets || 0;
+  const pctOf = (n, of) => of > 0 ? ((n / of) * 100).toFixed(1) + '%' : '0%';
+  const widthOf = (n, of) => of > 0 ? Math.max(0, Math.min(100, (n / of) * 100)) : 0;
   const funnelDefs = [
-    { label: 'Event Views',    value: fmt((kpis?.totalEvents || 0) * 100), pct: '100%',  w: 100, c: '#0098F0' },
-    { label: 'RSVPs',          value: fmt(kpis?.totalRsvps),  pct: totalRsvps > 0 ? ((totalRsvps / ((kpis?.totalEvents||1)*100))*100).toFixed(1)+'%' : '0%', w: 55, c: '#19BFFF' },
-    { label: 'Attended',       value: fmt(Math.round(totalRsvps * 0.74)), pct: '74%', w: 38, c: '#7C5CFF' },
-    { label: 'Tickets Bought', value: fmt(totalTickets), pct: totalRsvps > 0 ? ((totalTickets/totalRsvps)*100).toFixed(1)+'%' : '0%', w: 30, c: '#15A34A' },
+    { label: 'Event Views',    value: fmt(views),   pct: '100%', w: 100, c: '#0098F0' },
+    { label: 'RSVPs',          value: fmt(rsvps),   pct: pctOf(rsvps, views), w: widthOf(rsvps, views), c: '#19BFFF' },
+    { label: 'Tickets Bought', value: fmt(tickets), pct: pctOf(tickets, views), w: widthOf(tickets, views), c: '#15A34A' },
   ];
+  const overallConversion = pctOf(tickets, views);
   const feedItems = liveEvents.length > 0 ? liveEvents : [];
-  const fallbackFeed = (() => { const off = tick % ACTIVITY_DATA.length; return [...ACTIVITY_DATA.slice(off), ...ACTIVITY_DATA.slice(0, off)]; })();
 
   return (
     <>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16 }}>
         {kpiDefs.map((k, i) => (
-          <KpiCard key={i} label={k.label} value={k.value} delta={k.delta} pos={k.pos} iconBg={k.iconBg} iconSvg={k.icon} iconColor={k.color} spark={<Sparkline pts={k.spark} color={k.color}/>}/>
+          <KpiCard key={i} label={k.label} value={k.value} iconBg={k.iconBg} iconSvg={k.icon} iconColor={k.color}/>
         ))}
       </div>
 
@@ -307,12 +314,16 @@ function OverviewView({ tick, theme, onViewAllEvents, kpis, events, liveEvents }
               <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: '#FFB020' }}/><span style={{ fontSize: 13, fontWeight: 600, color: '#5B6473' }}>RSVPs</span></div>
             </div>
           </div>
-          <div style={{ marginTop: 18 }}><TrendChart theme={theme}/></div>
+          {/* No historical snapshots exist yet to plot a real trend from —
+              show an honest empty state instead of a fabricated chart. */}
+          <div style={{ marginTop: 18, height: 210, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9AA3B2', fontSize: 13.5, fontWeight: 600 }}>
+            No engagement history yet — check back once your community starts using the app
+          </div>
         </div>
 
         <div style={{ background: '#fff', borderRadius: 20, padding: 20, boxShadow: '0 4px 16px rgba(16,24,40,0.05)' }}>
           <div style={{ fontSize: 17, fontWeight: 800 }}>Engagement Funnel</div>
-          <div style={{ fontSize: 13.5, color: '#7B8499', marginTop: 2 }}>Views → RSVP → Attend → Ticket</div>
+          <div style={{ fontSize: 13.5, color: '#7B8499', marginTop: 2 }}>Views → RSVP → Ticket</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 11, marginTop: 18 }}>
             {funnelDefs.map((f, i) => (
               <div key={i}>
@@ -328,7 +339,7 @@ function OverviewView({ tick, theme, onViewAllEvents, kpis, events, liveEvents }
           </div>
           <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid #EEF1F6', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span style={{ fontSize: 13.5, fontWeight: 600, color: '#7B8499' }}>Overall conversion</span>
-            <span style={{ fontSize: 16, fontWeight: 800, color: '#22C55E' }}>14.8%</span>
+            <span style={{ fontSize: 16, fontWeight: 800, color: '#22C55E' }}>{overallConversion}</span>
           </div>
         </div>
       </div>
@@ -373,7 +384,12 @@ function OverviewView({ tick, theme, onViewAllEvents, kpis, events, liveEvents }
             </div>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 14 }}>
-            {(feedItems.length > 0 ? feedItems : fallbackFeed).slice(0, 6).map((a, i) => {
+            {feedItems.length === 0 && (
+              <div style={{ padding: '24px 0', textAlign: 'center', color: '#9AA3B2', fontSize: 13.5, fontWeight: 600 }}>
+                No activity yet
+              </div>
+            )}
+            {feedItems.slice(0, 6).map((a, i) => {
               const ic = ACT_ICONS[a.kind] || ACT_ICONS.rsvp;
               const who = a.who || a.user_id?.slice(0, 8) || 'User';
               const action = a.action || (a.kind === 'rsvp' ? "RSVP'd to" : a.kind === 'ticket' ? 'bought a ticket for' : a.kind === 'like' ? 'liked' : 'joined');
@@ -1669,6 +1685,7 @@ export default function Dashboard() {
               kpis={displayKpis}
               events={events}
               liveEvents={liveEvents}
+              funnelStats={funnelStats}
             />
           )}
           {nav === 'events' && (
