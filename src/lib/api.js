@@ -43,14 +43,23 @@ export const fetchEvents = async (status = null) => {
   return data ?? [];
 };
 
-export const createEvent = async (payload, userId) => {
+export const createEvent = async (payload, userId, status = 'pending') => {
   const { data, error } = await supabase
     .from('events')
-    .insert({ ...payload, created_by: userId, status: 'pending' })
+    .insert({ ...payload, created_by: userId, status })
     .select()
     .single();
   if (error) throw error;
   return data;
+};
+
+export const uploadEventCover = async (file) => {
+  const ext = file.name.split('.').pop();
+  const path = `${crypto.randomUUID()}.${ext}`;
+  const { error } = await supabase.storage.from('event-covers').upload(path, file);
+  if (error) throw error;
+  const { data } = supabase.storage.from('event-covers').getPublicUrl(path);
+  return data.publicUrl;
 };
 
 export const updateEventStatus = async (id, status) => {
@@ -91,10 +100,41 @@ export const fetchUsers = async () => {
 export const fetchChats = async () => {
   const { data, error } = await supabase
     .from('chats')
-    .select('id, name, initial, color, last_message, last_message_at')
+    .select('id, name, initial, color, last_message, last_message_at, group_id')
     .order('last_message_at', { ascending: false });
   if (error) throw error;
   return data ?? [];
+};
+
+// Reuses the existing chat for a group (chats.group_id is unique per group)
+// instead of creating a duplicate every time the admin clicks "Message".
+export const startGroupChat = async (group, adminUserId) => {
+  const { data: existing, error: findError } = await supabase
+    .from('chats')
+    .select('id, name, initial, color, last_message, last_message_at, group_id')
+    .eq('group_id', group.id)
+    .maybeSingle();
+  if (findError) throw findError;
+  if (existing) return existing;
+
+  const { data: chat, error } = await supabase
+    .from('chats')
+    .insert({
+      group_id: group.id,
+      name: group.name,
+      initial: group.initial || group.name?.charAt(0) || '?',
+      color: group.logo_color || null,
+    })
+    .select('id, name, initial, color, last_message, last_message_at, group_id')
+    .single();
+  if (error) throw error;
+
+  if (adminUserId) {
+    // Best-effort: chat_participants tracks who's in the thread, but a
+    // missing row here shouldn't block the admin from messaging the group.
+    await supabase.from('chat_participants').insert({ chat_id: chat.id, user_id: adminUserId });
+  }
+  return chat;
 };
 
 export const fetchMessages = async (chatId) => {

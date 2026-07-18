@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   fetchOverviewKpis,
-  fetchEvents, createEvent, updateEventStatus, deleteEvent,
+  fetchEvents, createEvent, uploadEventCover, updateEventStatus, deleteEvent,
   fetchGroups,
   fetchUsers,
-  fetchChats, fetchMessages, sendMessage, subscribeToMessages,
+  fetchChats, fetchMessages, sendMessage, subscribeToMessages, startGroupChat,
   fetchNotifications, markAllNotificationsRead,
   fetchFunnelStats, fetchPendingEvents, fetchRecentReviews,
   subscribeToActivity,
@@ -458,7 +458,7 @@ function EventsView({ theme, evFilter, setEvFilter, events, onApprove, onReject,
 }
 
 // ── Groups & Communities view ─────────────────────────────────────────────────
-function GroupsView({ theme, grpFilter, setGrpFilter, groups }) {
+function GroupsView({ theme, grpFilter, setGrpFilter, groups, onMessageGroup, startingChatGroupId }) {
   const totalMembers = groups.reduce((s, g) => s + (g.member_count || 0), 0);
   const fmt = n => n >= 1000 ? (n/1000).toFixed(1).replace(/\.0$/,'')+'K' : String(n);
   // No historical snapshots exist yet for real deltas/sparklines, and no
@@ -549,10 +549,11 @@ function GroupsView({ theme, grpFilter, setGrpFilter, groups }) {
             ))}
           </div>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr', gap: 8, padding: '14px 4px 10px', borderBottom: '1px solid #EEF1F6' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 100px', gap: 8, padding: '14px 4px 10px', borderBottom: '1px solid #EEF1F6' }}>
           {['Community','Type','Members','New (30d)','Active'].map((h, i) => (
             <span key={i} style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.3, color: '#9AA3B2', textTransform: 'uppercase', textAlign: i >= 2 ? 'right' : 'left' }}>{h}</span>
           ))}
+          <span />
         </div>
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           {filtered.map((g, i) => {
@@ -560,8 +561,9 @@ function GroupsView({ theme, grpFilter, setGrpFilter, groups }) {
             const initial = g.initial || g.name?.charAt(0) || '?';
             const privacy = g.privacy || 'public';
             const typeStyle = typeStyles[privacy] || typeStyles.public;
+            const starting = startingChatGroupId === g.id;
             return (
-              <div key={g.id || i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr', gap: 8, alignItems: 'center', padding: '13px 4px', borderBottom: '1px solid #F5F7FA' }}>
+              <div key={g.id || i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 100px', gap: 8, alignItems: 'center', padding: '13px 4px', borderBottom: '1px solid #F5F7FA' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 11, minWidth: 0 }}>
                   <div style={{ width: 36, height: 36, borderRadius: 11, flex: 'none', background: grad, position: 'relative', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 14, fontWeight: 800 }}>
                     <div style={{ position: 'absolute', inset: 0, background: 'repeating-linear-gradient(135deg,rgba(255,255,255,0.16) 0,rgba(255,255,255,0.16) 2px,transparent 2px,transparent 8px)' }}/>
@@ -576,6 +578,11 @@ function GroupsView({ theme, grpFilter, setGrpFilter, groups }) {
                 <span style={{ fontSize: 14, fontWeight: 700, textAlign: 'right' }}>{(g.member_count ?? 0).toLocaleString()}</span>
                 <span style={{ fontSize: 14, fontWeight: 800, textAlign: 'right', color: '#15A34A' }}>{g.event_count ?? 0} events</span>
                 <span style={{ fontSize: 14, fontWeight: 600, textAlign: 'right', color: '#5B6473' }}>{g.post_count ?? 0} posts</span>
+                <span style={{ textAlign: 'right' }}>
+                  <button onClick={() => onMessageGroup?.(g)} disabled={starting} style={{ height: 30, padding: '0 12px', borderRadius: 9, border: '1.5px solid #E8EBF0', background: '#fff', color: '#0098F0', fontSize: 12.5, fontWeight: 700, cursor: starting ? 'not-allowed' : 'pointer', fontFamily: 'inherit', opacity: starting ? 0.6 : 1 }}>
+                    {starting ? 'Opening…' : 'Message'}
+                  </button>
+                </span>
               </div>
             );
           })}
@@ -1085,20 +1092,60 @@ function ActivityView({ actFilter, setActFilter, theme, liveEvents, sessionCount
 }
 
 // ── Messages view ────────────────────────────────────────────────────────────
-function MessagesView({ chats, activeChat, setActiveChat, messages, msgsLoading, msgDraft, setMsgDraft, onSend, msgEndRef }) {
+function MessagesView({ chats, activeChat, setActiveChat, messages, msgsLoading, msgDraft, setMsgDraft, onSend, msgEndRef, groups = [], onMessageGroup, startingChatGroupId }) {
   const chatColors = ['linear-gradient(135deg,#19BFFF,#0E84E0)','linear-gradient(135deg,#10B981,#06B6D4)','linear-gradient(135deg,#7C5CFF,#B06BFF)','linear-gradient(135deg,#FF6B6B,#FFB347)'];
+  const [showGroupPicker, setShowGroupPicker] = useState(false);
+  const [groupSearch, setGroupSearch] = useState('');
+  const messagedGroupIds = new Set(chats.filter(c => c.group_id).map(c => c.group_id));
+  const pickerGroups = groups.filter(g => g.name?.toLowerCase().includes(groupSearch.toLowerCase()));
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 16, height: 'calc(100vh - 220px)', minHeight: 480 }}>
       {/* Conversation list */}
-      <div style={{ background: '#fff', borderRadius: 20, boxShadow: '0 4px 16px rgba(16,24,40,0.05)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div style={{ background: '#fff', borderRadius: 20, boxShadow: '0 4px 16px rgba(16,24,40,0.05)', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
         <div style={{ padding: '18px 18px 12px' }}>
-          <div style={{ fontSize: 17, fontWeight: 800 }}>Conversations</div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ fontSize: 17, fontWeight: 800 }}>Conversations</div>
+            <button onClick={() => setShowGroupPicker(v => !v)} style={{ display: 'flex', alignItems: 'center', gap: 5, height: 28, padding: '0 11px', borderRadius: 999, border: 'none', background: showGroupPicker ? '#0098F0' : '#E9F6FF', color: showGroupPicker ? '#fff' : '#0098F0', fontSize: 12.5, fontWeight: 800, cursor: 'pointer', fontFamily: 'inherit' }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"/></svg>
+              Message a group
+            </button>
+          </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#F1F3F7', borderRadius: 12, padding: '0 13px', height: 42, marginTop: 12 }}>
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="#9AA3B2" strokeWidth="2"/><path d="m20 20-3.2-3.2" stroke="#9AA3B2" strokeWidth="2" strokeLinecap="round"/></svg>
             <span style={{ fontSize: 14, color: '#9AA3B2', fontWeight: 500 }}>Search chats…</span>
           </div>
         </div>
+        {showGroupPicker && (
+          <div style={{ position: 'absolute', top: 62, left: 12, right: 12, zIndex: 10, background: '#fff', border: '1.5px solid #E8EBF0', borderRadius: 14, boxShadow: '0 12px 30px rgba(16,24,40,0.14)', maxHeight: 340, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <div style={{ padding: 10, borderBottom: '1px solid #F1F3F7' }}>
+              <input autoFocus value={groupSearch} onChange={e => setGroupSearch(e.target.value)} placeholder="Search groups…"
+                style={{ width: '100%', boxSizing: 'border-box', height: 36, border: '1.5px solid #E8EBF0', borderRadius: 10, padding: '0 11px', fontSize: 13.5, fontWeight: 500, outline: 'none', fontFamily: 'inherit' }} />
+            </div>
+            <div style={{ overflowY: 'auto' }}>
+              {pickerGroups.length === 0 && (
+                <div style={{ padding: '18px 14px', textAlign: 'center', color: '#9AA3B2', fontSize: 13.5 }}>No groups found</div>
+              )}
+              {pickerGroups.map(g => {
+                const starting = startingChatGroupId === g.id;
+                const alreadyMessaged = messagedGroupIds.has(g.id);
+                return (
+                  <button key={g.id} disabled={starting} onClick={() => { onMessageGroup?.(g); setShowGroupPicker(false); setGroupSearch(''); }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', padding: '10px 14px', border: 'none', background: '#fff', cursor: starting ? 'not-allowed' : 'pointer', fontFamily: 'inherit', textAlign: 'left', opacity: starting ? 0.6 : 1 }}>
+                    <div style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 800, color: '#fff', background: g.logo_color || chatColors[0] }}>
+                      {g.initial || g.name?.charAt(0) || '?'}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{g.name}</div>
+                      {alreadyMessaged && <div style={{ fontSize: 11.5, color: '#9AA3B2' }}>Already messaged — opens existing chat</div>}
+                    </div>
+                    {starting && <span style={{ fontSize: 12, color: '#9AA3B2', flexShrink: 0 }}>Opening…</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {chats.length === 0 && <div style={{ padding: '24px 18px', textAlign: 'center', color: '#9AA3B2', fontSize: 14 }}>No conversations yet</div>}
           {chats.map((c, ci) => {
@@ -1113,7 +1160,10 @@ function MessagesView({ chats, activeChat, setActiveChat, messages, msgsLoading,
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
-                    <span style={{ fontSize: 14.5, fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.name}</span>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                      <span style={{ fontSize: 14.5, fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.name}</span>
+                      {c.group_id && <span style={{ flexShrink: 0, fontSize: 10.5, fontWeight: 800, color: '#7C5CFF', background: '#F1ECFF', padding: '1px 7px', borderRadius: 999 }}>GROUP</span>}
+                    </span>
                     <span style={{ fontSize: 11.5, color: '#9AA3B2', flexShrink: 0 }}>{timeStr}</span>
                   </div>
                   <div style={{ fontSize: 13, color: '#7B8499', marginTop: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.last_message || 'No messages yet'}</div>
@@ -1137,7 +1187,7 @@ function MessagesView({ chats, activeChat, setActiveChat, messages, msgsLoading,
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 16, fontWeight: 800 }}>{activeChat.name}</div>
-                <div style={{ fontSize: 12.5, color: '#22C55E', fontWeight: 700 }}>Chat</div>
+                <div style={{ fontSize: 12.5, color: '#22C55E', fontWeight: 700 }}>{activeChat.group_id ? 'Group chat' : 'Chat'}</div>
               </div>
             </div>
 
@@ -1175,7 +1225,7 @@ function MessagesView({ chats, activeChat, setActiveChat, messages, msgsLoading,
 }
 
 // ── Create Event view ─────────────────────────────────────────────────────────
-function CreateEventView({ ceCat, setCeCat, ceTitle, setCeTitle, ceAbout, setCeAbout, ceDate, setCeDate, ceStart, setCeStart, ceEnd, setCeEnd, ceVenue, setCeVenue, cePricing, setCePricing, cePrice, setCePrice, ceCapacity, setCeCapacity, onPublish, onDraft, submitting }) {
+function CreateEventView({ ceCat, setCeCat, ceTitle, setCeTitle, ceAbout, setCeAbout, ceDate, setCeDate, ceStart, setCeStart, ceEnd, setCeEnd, ceVenue, setCeVenue, cePricing, setCePricing, cePrice, setCePrice, ceCapacity, setCeCapacity, ceCoverUrl, onCoverUpload, coverUploading, onPublish, onDraft, submitting }) {
   const activeCat = CE_CATS.find(c => c.id === ceCat) || CE_CATS[0];
 
   const fieldWrap = (icon, children) => (
@@ -1184,8 +1234,8 @@ function CreateEventView({ ceCat, setCeCat, ceTitle, setCeTitle, ceAbout, setCeA
     </div>
   );
 
-  const fieldInput = (val, setter, placeholder) => (
-    <input value={val} onChange={e => setter(e.target.value)} placeholder={placeholder}
+  const fieldInput = (val, setter, placeholder, type = 'text') => (
+    <input type={type} value={val} onChange={e => setter(e.target.value)} placeholder={placeholder}
       style={{ width: '100%', border: 'none', background: 'none', fontSize: 15, fontWeight: 600, color: '#1A2233', outline: 'none', fontFamily: 'inherit' }} />
   );
 
@@ -1199,13 +1249,22 @@ function CreateEventView({ ceCat, setCeCat, ceTitle, setCeTitle, ceAbout, setCeA
           {/* Cover */}
           <div style={{ background: '#fff', borderRadius: 20, padding: 20, boxShadow: '0 4px 16px rgba(16,24,40,0.05)' }}>
             {label('Cover')}
-            <div style={{ width: '100%', height: 150, borderRadius: 16, border: '2px dashed #C7D2E0', background: activeCat.grad, position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, cursor: 'pointer' }}>
-              <div style={{ position: 'absolute', inset: 0, background: 'repeating-linear-gradient(135deg,rgba(255,255,255,0.10) 0,rgba(255,255,255,0.10) 2px,transparent 2px,transparent 16px)' }} />
+            <label style={{
+              width: '100%', height: 150, borderRadius: 16, border: '2px dashed #C7D2E0',
+              background: ceCoverUrl ? `url(${ceCoverUrl}) center/cover no-repeat` : activeCat.grad,
+              position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column',
+              alignItems: 'center', justifyContent: 'center', gap: 8, cursor: coverUploading ? 'wait' : 'pointer',
+            }}>
+              <input type="file" accept="image/*" disabled={coverUploading} onChange={e => onCoverUpload?.(e.target.files?.[0])} style={{ display: 'none' }} />
+              {!ceCoverUrl && <div style={{ position: 'absolute', inset: 0, background: 'repeating-linear-gradient(135deg,rgba(255,255,255,0.10) 0,rgba(255,255,255,0.10) 2px,transparent 2px,transparent 16px)' }} />}
+              {ceCoverUrl && <div style={{ position: 'absolute', inset: 0, background: 'rgba(14,23,38,0.35)' }} />}
               <div style={{ width: 44, height: 44, borderRadius: 13, background: 'rgba(255,255,255,0.9)', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
                 <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><rect x="3.5" y="6" width="17" height="13" rx="3" stroke="#0098F0" strokeWidth="1.9"/><circle cx="12" cy="12.5" r="3" stroke="#0098F0" strokeWidth="1.9"/><path d="M8.5 6l1-2h5l1 2" stroke="#0098F0" strokeWidth="1.9" strokeLinejoin="round"/></svg>
               </div>
-              <div style={{ fontSize: 14, fontWeight: 800, color: '#fff', position: 'relative' }}>Add cover photo</div>
-            </div>
+              <div style={{ fontSize: 14, fontWeight: 800, color: '#fff', position: 'relative' }}>
+                {coverUploading ? 'Uploading…' : ceCoverUrl ? 'Change cover photo' : 'Add cover photo'}
+              </div>
+            </label>
           </div>
 
           {/* Details */}
@@ -1238,16 +1297,16 @@ function CreateEventView({ ceCat, setCeCat, ceTitle, setCeTitle, ceAbout, setCeA
             {label('When & Where')}
             {fieldWrap(
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0 }}><rect x="3.5" y="5" width="17" height="15.5" rx="3" stroke="#0098F0" strokeWidth="1.9"/><path d="M3.5 9.5h17M8 3v4M16 3v4" stroke="#0098F0" strokeWidth="1.9" strokeLinecap="round"/></svg>,
-              fieldInput(ceDate, setCeDate, 'Date — Jan 15, 2026')
+              fieldInput(ceDate, setCeDate, '', 'date')
             )}
             <div style={{ display: 'flex', gap: 10 }}>
               {fieldWrap(
                 <svg width="17" height="17" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0 }}><circle cx="12" cy="12" r="8.5" stroke="#0098F0" strokeWidth="1.9"/><path d="M12 8v4.5l3 2" stroke="#0098F0" strokeWidth="1.9" strokeLinecap="round"/></svg>,
-                fieldInput(ceStart, setCeStart, 'Start')
+                fieldInput(ceStart, setCeStart, '', 'time')
               )}
               {fieldWrap(
                 <svg width="17" height="17" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0 }}><circle cx="12" cy="12" r="8.5" stroke="#9AA3B2" strokeWidth="1.9"/><path d="M12 8v4.5l3 2" stroke="#9AA3B2" strokeWidth="1.9" strokeLinecap="round"/></svg>,
-                fieldInput(ceEnd, setCeEnd, 'End')
+                fieldInput(ceEnd, setCeEnd, '', 'time')
               )}
             </div>
             {fieldWrap(
@@ -1338,6 +1397,7 @@ export default function Dashboard() {
   const [messages, setMessages] = useState([]);
   const [msgDraft, setMsgDraft] = useState('');
   const [msgsLoading, setMsgsLoading] = useState(false);
+  const [startingChatGroupId, setStartingChatGroupId] = useState(null);
   const msgEndRef = useRef(null);
 
   // ── Create Event state ─────────────────────────────────────────────────────
@@ -1351,6 +1411,8 @@ export default function Dashboard() {
   const [cePricing, setCePricing] = useState('free');
   const [cePrice, setCePrice] = useState('');
   const [ceCapacity, setCeCapacity] = useState(500);
+  const [ceCoverUrl, setCeCoverUrl] = useState('');
+  const [ceCoverUploading, setCeCoverUploading] = useState(false);
   const [ceSubmitting, setCeSubmitting] = useState(false);
 
   // ── Toast ──────────────────────────────────────────────────────────────────
@@ -1450,24 +1512,79 @@ export default function Dashboard() {
     if (msg) setMessages(prev => [...prev, msg]);
   };
 
+  // ── Start / open a group chat ──────────────────────────────────────────────
+  const handleMessageGroup = async (group) => {
+    setStartingChatGroupId(group.id);
+    try {
+      const chat = await startGroupChat(group, userId);
+      setChats(prev => prev.some(c => c.id === chat.id) ? prev : [chat, ...prev]);
+      setActiveChat(chat);
+      setNav('messages');
+    } catch (err) {
+      showToast('Could not start chat: ' + err.message);
+    } finally {
+      setStartingChatGroupId(null);
+    }
+  };
+
   // ── Create event ───────────────────────────────────────────────────────────
+  // ceDate is a native <input type="date"> value (YYYY-MM-DD) — `date` is what
+  // EventsView parses with `new Date(e.date)`, so it must actually be set
+  // here rather than only the human-readable `full_date` string.
+  const buildEventPayload = () => ({
+    title: ceTitle, category: ceCat, full_desc: ceAbout, description: ceAbout,
+    date: ceDate || null,
+    full_date: ceDate ? new Date(ceDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : '',
+    start_time: ceStart, time_range: ceStart && ceEnd ? `${ceStart} – ${ceEnd}` : (ceStart || ceEnd || ''),
+    venue: ceVenue, price: cePricing === 'free' ? 'Free' : `$${cePrice}`,
+    capacity: ceCapacity, image_url: ceCoverUrl || null,
+  });
+
+  const resetEventForm = () => {
+    setCeTitle(''); setCeAbout(''); setCeDate(''); setCeStart(''); setCeEnd('');
+    setCeVenue(''); setCeCapacity(500); setCeCoverUrl(''); setCePricing('free'); setCePrice('');
+  };
+
   const handlePublishEvent = async () => {
     if (!ceTitle.trim()) { showToast('Please add an event title'); return; }
     setCeSubmitting(true);
     try {
-      await createEvent({
-        title: ceTitle, category: ceCat, full_desc: ceAbout,
-        full_date: ceDate, start_time: ceStart, time_range: `${ceStart} – ${ceEnd}`,
-        venue: ceVenue, price: cePricing === 'free' ? 'Free' : `$${cePrice}`,
-        capacity: ceCapacity,
-      }, userId);
+      await createEvent(buildEventPayload(), userId, 'pending');
       showToast('Event submitted for approval!');
-      setCeTitle(''); setCeAbout(''); setCeDate(''); setCeStart(''); setCeEnd(''); setCeVenue(''); setCeCapacity(500);
+      resetEventForm();
       fetchPendingEvents().then(setPendingEvents).catch(() => {});
     } catch (err) {
       showToast('Error: ' + err.message);
     } finally {
       setCeSubmitting(false);
+    }
+  };
+
+  const handleSaveDraft = async () => {
+    if (!ceTitle.trim()) { showToast('Please add an event title'); return; }
+    setCeSubmitting(true);
+    try {
+      await createEvent(buildEventPayload(), userId, 'draft');
+      showToast('Draft saved');
+      resetEventForm();
+      fetchEvents().then(setEvents).catch(() => {});
+    } catch (err) {
+      showToast('Error: ' + err.message);
+    } finally {
+      setCeSubmitting(false);
+    }
+  };
+
+  const handleCoverUpload = async (file) => {
+    if (!file) return;
+    setCeCoverUploading(true);
+    try {
+      const url = await uploadEventCover(file);
+      setCeCoverUrl(url);
+    } catch (err) {
+      showToast('Cover upload failed: ' + err.message);
+    } finally {
+      setCeCoverUploading(false);
     }
   };
 
@@ -1655,7 +1772,7 @@ export default function Dashboard() {
             />
           )}
           {nav === 'groups' && (
-            <GroupsView theme={theme} grpFilter={grpFilter} setGrpFilter={setGrpFilter} groups={groups} />
+            <GroupsView theme={theme} grpFilter={grpFilter} setGrpFilter={setGrpFilter} groups={groups} onMessageGroup={handleMessageGroup} startingChatGroupId={startingChatGroupId} />
           )}
           {nav === 'funnel' && (
             <FunnelView
@@ -1685,6 +1802,9 @@ export default function Dashboard() {
               setMsgDraft={setMsgDraft}
               onSend={handleSendMessage}
               msgEndRef={msgEndRef}
+              groups={groups}
+              onMessageGroup={handleMessageGroup}
+              startingChatGroupId={startingChatGroupId}
             />
           )}
           {nav === 'create' && (
@@ -1699,8 +1819,9 @@ export default function Dashboard() {
               cePricing={cePricing} setCePricing={setCePricing}
               cePrice={cePrice} setCePrice={setCePrice}
               ceCapacity={ceCapacity} setCeCapacity={setCeCapacity}
+              ceCoverUrl={ceCoverUrl} onCoverUpload={handleCoverUpload} coverUploading={ceCoverUploading}
               onPublish={handlePublishEvent}
-              onDraft={() => showToast('Draft saved locally')}
+              onDraft={handleSaveDraft}
               submitting={ceSubmitting}
             />
           )}
