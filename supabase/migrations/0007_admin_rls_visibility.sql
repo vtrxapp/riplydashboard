@@ -11,17 +11,17 @@
 drop policy if exists events_select_admin on public.events;
 create policy events_select_admin on public.events
   for select
-  using (is_admin());
+  using (public.is_admin());
 
 drop policy if exists events_update_admin on public.events;
 create policy events_update_admin on public.events
   for update
-  using (is_admin())
-  with check (is_admin());
+  using (public.is_admin())
+  with check (public.is_admin());
 
 -- Tickets: admin KPIs/funnel need the true platform-wide ticket count, not
 -- just tickets the admin personally purchased.
 drop policy if exists tickets_select_admin on public.tickets;
 create policy tickets_select_admin on public.tickets
   for select
-  using (is_admin());
+  using (public.is_admin());
