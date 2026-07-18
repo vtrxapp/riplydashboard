@@ -266,7 +266,7 @@ function KpiCard({ label, value, delta, pos, iconBg, iconSvg, iconColor, spark }
 }
 
 // ── Overview view ─────────────────────────────────────────────────────────────
-function OverviewView({ tick, theme, onViewAllEvents, kpis, events, liveEvents, funnelStats }) {
+function OverviewView({ theme, onViewAllEvents, kpis, events, liveEvents, funnelStats }) {
   const fmt = n => n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'K' : String(n ?? 0);
   // No historical snapshots exist yet to compute real period-over-period
   // deltas or sparklines from, so those are omitted rather than faked.
@@ -278,20 +278,30 @@ function OverviewView({ tick, theme, onViewAllEvents, kpis, events, liveEvents, 
   ];
   const catColors = { social:'linear-gradient(135deg,#FF5A8A,#FF8A3D)', career:'linear-gradient(135deg,#2F6BFF,#6C4DF2)', academic:'linear-gradient(135deg,#7C5CFF,#B06BFF)', sports:'linear-gradient(135deg,#10B981,#06B6D4)', festival:'linear-gradient(135deg,#FF6B6B,#FFB347)' };
   const topEvents = (events.length ? events : []).slice(0, 5);
-  // Real numbers only — no "attended" stage since there's no data source
-  // for it (RSVPs/tickets don't track actual attendance), and no fabricated
-  // conversion percentages when the denominator is zero.
+  // funnelStats is null while loading or if the fetch failed — distinct
+  // from a real zero, so it gets its own "unavailable" state below rather
+  // than silently rendering as an all-zero funnel.
+  const funnelUnavailable = funnelStats == null;
+  // totalViews is a scaled proxy (event likes, not real view tracking — no
+  // view-tracking data source exists yet), so it's labeled as an estimate
+  // and never used as a denominator for a conversion rate we'd present as
+  // real. Overall conversion is computed from RSVPs -> tickets instead,
+  // which are both real counts.
   const views = funnelStats?.totalViews || 0;
   const rsvps = funnelStats?.totalRsvps || 0;
   const tickets = funnelStats?.totalTickets || 0;
-  const pctOf = (n, of) => of > 0 ? ((n / of) * 100).toFixed(1) + '%' : '0%';
+  const pctOf = (n, of) => of > 0 ? ((n / of) * 100).toFixed(1) + '%' : '—';
   const widthOf = (n, of) => of > 0 ? Math.max(0, Math.min(100, (n / of) * 100)) : 0;
   const funnelDefs = [
-    { label: 'Event Views',    value: fmt(views),   pct: '100%', w: 100, c: '#0098F0' },
-    { label: 'RSVPs',          value: fmt(rsvps),   pct: pctOf(rsvps, views), w: widthOf(rsvps, views), c: '#19BFFF' },
-    { label: 'Tickets Bought', value: fmt(tickets), pct: pctOf(tickets, views), w: widthOf(tickets, views), c: '#15A34A' },
+    { label: 'Event Views (est.)', value: fmt(views),   pct: views > 0 ? '100%' : '—', w: views > 0 ? 100 : 0, c: '#0098F0' },
+    { label: 'RSVPs',              value: fmt(rsvps),   pct: pctOf(rsvps, views), w: widthOf(rsvps, views), c: '#19BFFF' },
+    { label: 'Tickets Bought',     value: fmt(tickets), pct: pctOf(tickets, views), w: widthOf(tickets, views), c: '#15A34A' },
   ];
-  const overallConversion = pctOf(tickets, views);
+  const overallConversion = pctOf(tickets, rsvps);
+  // liveEvents only contains realtime INSERTs received since this page
+  // mounted — it isn't hydrated with pre-existing activity, so "no items
+  // yet" means "nothing new happened while this tab was open," not
+  // "there's no activity at all."
   const feedItems = liveEvents.length > 0 ? liveEvents : [];
 
   return (
@@ -324,23 +334,31 @@ function OverviewView({ tick, theme, onViewAllEvents, kpis, events, liveEvents, 
         <div style={{ background: '#fff', borderRadius: 20, padding: 20, boxShadow: '0 4px 16px rgba(16,24,40,0.05)' }}>
           <div style={{ fontSize: 17, fontWeight: 800 }}>Engagement Funnel</div>
           <div style={{ fontSize: 13.5, color: '#7B8499', marginTop: 2 }}>Views → RSVP → Ticket</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 11, marginTop: 18 }}>
-            {funnelDefs.map((f, i) => (
-              <div key={i}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <span style={{ fontSize: 14, fontWeight: 700, color: '#1A2233' }}>{f.label}</span>
-                  <span style={{ fontSize: 14, fontWeight: 800, color: '#0E1726' }}>{f.value} <span style={{ fontSize: 12, fontWeight: 600, color: '#9AA3B2' }}>({f.pct})</span></span>
-                </div>
-                <div style={{ height: 12, borderRadius: 999, background: '#EEF1F6', overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: f.w + '%', borderRadius: 999, background: f.c }}/>
-                </div>
+          {funnelUnavailable ? (
+            <div style={{ marginTop: 18, padding: '24px 0', textAlign: 'center', color: '#9AA3B2', fontSize: 13.5, fontWeight: 600 }}>
+              Funnel data unavailable
+            </div>
+          ) : (
+            <>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 11, marginTop: 18 }}>
+                {funnelDefs.map((f, i) => (
+                  <div key={i}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: '#1A2233' }}>{f.label}</span>
+                      <span style={{ fontSize: 14, fontWeight: 800, color: '#0E1726' }}>{f.value} <span style={{ fontSize: 12, fontWeight: 600, color: '#9AA3B2' }}>({f.pct})</span></span>
+                    </div>
+                    <div style={{ height: 12, borderRadius: 999, background: '#EEF1F6', overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: f.w + '%', borderRadius: 999, background: f.c }}/>
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-          <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid #EEF1F6', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontSize: 13.5, fontWeight: 600, color: '#7B8499' }}>Overall conversion</span>
-            <span style={{ fontSize: 16, fontWeight: 800, color: '#22C55E' }}>{overallConversion}</span>
-          </div>
+              <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid #EEF1F6', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: 13.5, fontWeight: 600, color: '#7B8499' }}>Overall conversion</span>
+                <span style={{ fontSize: 16, fontWeight: 800, color: '#22C55E' }}>{overallConversion}</span>
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -386,7 +404,7 @@ function OverviewView({ tick, theme, onViewAllEvents, kpis, events, liveEvents, 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 14 }}>
             {feedItems.length === 0 && (
               <div style={{ padding: '24px 0', textAlign: 'center', color: '#9AA3B2', fontSize: 13.5, fontWeight: 600 }}>
-                No activity yet
+                No new activity yet
               </div>
             )}
             {feedItems.slice(0, 6).map((a, i) => {
@@ -1016,7 +1034,15 @@ function UsersView({ theme, users }) {
 }
 
 // ── Real-time Activity view ───────────────────────────────────────────────────
-function ActivityView({ tick, actFilter, setActFilter, theme, liveEvents }) {
+function ActivityView({ actFilter, setActFilter, theme, liveEvents }) {
+  // Scoped to this view (rather than the whole Dashboard) since it's the
+  // only consumer of this animated tick — no reason to rerender the entire
+  // dashboard every 4s while the user is on another tab.
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const iv = setInterval(() => setTick(t => t + 1), 4000);
+    return () => clearInterval(iv);
+  }, []);
   const ACT_FILTER_TABS = ['all','rsvp','ticket','event','group','like'];
   const liveStats = [
     { label: 'Active Users',    value: String(218 + (tick % 8)), iconBg: '#F1ECFF', color: '#7C5CFF', icon: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="3.4" stroke="C" stroke-width="2"/><path d="M5 20c0-3.6 3-5.6 7-5.6s7 2 7 5.6" stroke="C" stroke-width="2" stroke-linecap="round"/></svg>' },
@@ -1368,7 +1394,6 @@ export default function Dashboard() {
   const [bellOpen, setBellOpen] = useState(false);
   const [theme, setTheme] = useState('light');
   const [toast, setToast] = useState(null);
-  const [tick, setTick] = useState(0);
   const [evFilter, setEvFilter] = useState('all');
   const [grpFilter, setGrpFilter] = useState('all');
   const [actFilter, setActFilter] = useState('all');
@@ -1413,12 +1438,6 @@ export default function Dashboard() {
     clearTimeout(toastTimer.current);
     setToast(msg);
     toastTimer.current = setTimeout(() => setToast(null), 2500);
-  }, []);
-
-  // ── Live tick for animated charts ──────────────────────────────────────────
-  useEffect(() => {
-    const iv = setInterval(() => setTick(t => t + 1), 4000);
-    return () => clearInterval(iv);
   }, []);
 
   // ── Initial data fetch ─────────────────────────────────────────────────────
@@ -1680,7 +1699,7 @@ export default function Dashboard() {
         <div style={{ flex: 1, padding: '22px 30px 40px' }}>
           {nav === 'overview' && (
             <OverviewView
-              tick={tick} theme={theme}
+              theme={theme}
               onViewAllEvents={() => setNav('events')}
               kpis={displayKpis}
               events={events}
@@ -1719,7 +1738,7 @@ export default function Dashboard() {
             <UsersView theme={theme} users={users} />
           )}
           {nav === 'activity' && (
-            <ActivityView tick={tick} actFilter={actFilter} setActFilter={setActFilter} theme={theme} liveEvents={liveEvents} />
+            <ActivityView actFilter={actFilter} setActFilter={setActFilter} theme={theme} liveEvents={liveEvents} />
           )}
           {nav === 'messages' && (
             <MessagesView
