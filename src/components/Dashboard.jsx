@@ -150,7 +150,7 @@ function KpiCard({ label, value, delta, pos, iconBg, iconSvg, iconColor }) {
 
 // ── Overview view ─────────────────────────────────────────────────────────────
 function OverviewView({ theme, onViewAllEvents, kpis, events, liveEvents, funnelStats }) {
-  const fmt = n => n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'K' : String(n ?? 0);
+  const fmt = n => n == null ? '—' : n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'K' : String(n);
   // No historical snapshots exist yet to compute real period-over-period
   // deltas or sparklines from, so those are omitted rather than faked.
   const kpiDefs = [
@@ -165,20 +165,15 @@ function OverviewView({ theme, onViewAllEvents, kpis, events, liveEvents, funnel
   // from a real zero, so it gets its own "unavailable" state below rather
   // than silently rendering as an all-zero funnel.
   const funnelUnavailable = funnelStats == null;
-  // totalViews is a scaled proxy (event likes, not real view tracking — no
-  // view-tracking data source exists yet), so it's labeled as an estimate
-  // and never used as a denominator for a conversion rate we'd present as
-  // real. Overall conversion is computed from RSVPs -> tickets instead,
-  // which are both real counts.
-  const views = funnelStats?.totalViews || 0;
+  // No real view-tracking data source exists — RSVPs are the first
+  // measurable stage of the funnel.
   const rsvps = funnelStats?.totalRsvps || 0;
   const tickets = funnelStats?.totalTickets || 0;
   const pctOf = (n, of) => of > 0 ? ((n / of) * 100).toFixed(1) + '%' : '—';
   const widthOf = (n, of) => of > 0 ? Math.max(0, Math.min(100, (n / of) * 100)) : 0;
   const funnelDefs = [
-    { label: 'Event Views (est.)', value: fmt(views),   pct: views > 0 ? '100%' : '—', w: views > 0 ? 100 : 0, c: '#0098F0' },
-    { label: 'RSVPs',              value: fmt(rsvps),   pct: pctOf(rsvps, views), w: widthOf(rsvps, views), c: '#19BFFF' },
-    { label: 'Tickets Bought',     value: fmt(tickets), pct: pctOf(tickets, views), w: widthOf(tickets, views), c: '#15A34A' },
+    { label: 'RSVPs',          value: fmt(rsvps),   pct: rsvps > 0 ? '100%' : '—', w: rsvps > 0 ? 100 : 0, c: '#19BFFF' },
+    { label: 'Tickets Bought', value: fmt(tickets), pct: pctOf(tickets, rsvps), w: widthOf(tickets, rsvps), c: '#15A34A' },
   ];
   const overallConversion = pctOf(tickets, rsvps);
   // liveEvents only contains realtime INSERTs received since this page
@@ -216,7 +211,7 @@ function OverviewView({ theme, onViewAllEvents, kpis, events, liveEvents, funnel
 
         <div style={{ background: '#fff', borderRadius: 20, padding: 20, boxShadow: '0 4px 16px rgba(16,24,40,0.05)' }}>
           <div style={{ fontSize: 17, fontWeight: 800 }}>Engagement Funnel</div>
-          <div style={{ fontSize: 13.5, color: '#7B8499', marginTop: 2 }}>Views → RSVP → Ticket</div>
+          <div style={{ fontSize: 13.5, color: '#7B8499', marginTop: 2 }}>RSVP → Ticket</div>
           {funnelUnavailable ? (
             <div style={{ marginTop: 18, padding: '24px 0', textAlign: 'center', color: '#9AA3B2', fontSize: 13.5, fontWeight: 600 }}>
               Funnel data unavailable
@@ -593,10 +588,8 @@ function GroupsView({ theme, grpFilter, setGrpFilter, groups }) {
 // ── Funnel & Moderation view ──────────────────────────────────────────────────
 function FunnelView({ theme, funnelStats, pendingEvents, recentReviews, onApprove, onReject, showToast }) {
   const avgRating = funnelStats?.avgRating ?? 0;
-  // totalViews is a scaled proxy (event likes, not real view tracking — no
-  // view-tracking data source exists yet), so it's labeled as an estimate
-  // and never used as a denominator for a rate we'd present as real.
-  const totalViews = funnelStats?.totalViews ?? 0;
+  // No real view-tracking data source exists — RSVPs are the first
+  // measurable stage of the funnel.
   const totalRsvps = funnelStats?.totalRsvps ?? 0;
   const totalTickets = funnelStats?.totalTickets ?? 0;
   const reviewCount = funnelStats?.reviewCount ?? 0;
@@ -613,11 +606,10 @@ function FunnelView({ theme, funnelStats, pendingEvents, recentReviews, onApprov
 
   const fmt = n => n >= 1000 ? (n/1000).toFixed(1).replace(/\.0$/,'')+'K' : String(n);
   // No "Attended" stage — RSVPs/tickets don't track actual attendance, so
-  // there's no real data source for it.
+  // there's no real data source for it. RSVPs are the first real stage.
   const stages = [
-    { label: 'Event Views (est.)', value: fmt(totalViews),   pct: totalViews > 0 ? '100%' : '—', w: totalViews > 0 ? 100 : 0, c: '#0098F0', drop: '' },
-    { label: 'RSVPs',              value: fmt(totalRsvps),   pct: (pctOf(totalRsvps, totalViews) ?? '0') + '%', w: Math.min(100, parseFloat(pctOf(totalRsvps, totalViews) || 0)), c: '#19BFFF', drop: '' },
-    { label: 'Tickets Bought',     value: fmt(totalTickets), pct: (pctOf(totalTickets, totalViews) ?? '0') + '%', w: Math.min(100, parseFloat(pctOf(totalTickets, totalViews) || 0)), c: '#15A34A', drop: rsvpToTicketDrop != null ? rsvpToTicketDrop + '%' : '' },
+    { label: 'RSVPs',          value: fmt(totalRsvps),   pct: totalRsvps > 0 ? '100%' : '—', w: totalRsvps > 0 ? 100 : 0, c: '#19BFFF', drop: '' },
+    { label: 'Tickets Bought', value: fmt(totalTickets), pct: (conv ?? '0') + '%', w: Math.min(100, parseFloat(conv || 0)), c: '#15A34A', drop: rsvpToTicketDrop != null ? rsvpToTicketDrop + '%' : '' },
   ];
 
   // Real per-star breakdown, computed from every review (not just the 5
@@ -640,19 +632,25 @@ function FunnelView({ theme, funnelStats, pendingEvents, recentReviews, onApprov
       <div style={{ display: 'grid', gridTemplateColumns: '1.55fr 1fr', gap: 16, marginTop: 16 }}>
         <div style={{ background: '#fff', borderRadius: 20, padding: 20, boxShadow: '0 4px 16px rgba(16,24,40,0.05)' }}>
           <div style={{ fontSize: 17, fontWeight: 800 }}>Conversion Funnel</div>
-          <div style={{ fontSize: 13.5, color: '#7B8499', marginTop: 2 }}>Discovery → attendance, with drop-off at each stage</div>
+          <div style={{ fontSize: 13.5, color: '#7B8499', marginTop: 2 }}>RSVP → ticket, with drop-off</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginTop: 18 }}>
             {stages.map((f, i) => (
               <div key={i}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ height: 42, width: f.w + '%', minWidth: 74, borderRadius: 11, background: f.c, display: 'flex', alignItems: 'center', paddingLeft: 13, boxSizing: 'border-box' }}>
-                      <span style={{ fontSize: 14, fontWeight: 800, color: '#fff', whiteSpace: 'nowrap' }}>{f.value}</span>
-                    </div>
+                    {f.w > 0 ? (
+                      <div style={{ height: 42, width: f.w + '%', minWidth: 74, borderRadius: 11, background: f.c, display: 'flex', alignItems: 'center', paddingLeft: 13, boxSizing: 'border-box' }}>
+                        <span style={{ fontSize: 14, fontWeight: 800, color: '#fff', whiteSpace: 'nowrap' }}>{f.value}</span>
+                      </div>
+                    ) : (
+                      <div style={{ height: 42, borderRadius: 11, border: '1.5px dashed #E4E7ED', display: 'flex', alignItems: 'center', paddingLeft: 13, boxSizing: 'border-box' }}>
+                        <span style={{ fontSize: 14, fontWeight: 700, color: '#9AA3B2' }}>{f.value}</span>
+                      </div>
+                    )}
                   </div>
                   <div style={{ flex: 'none', width: 120 }}>
                     <div style={{ fontSize: 14, fontWeight: 700, color: '#1A2233' }}>{f.label}</div>
-                    <div style={{ fontSize: 12, color: '#9AA3B2' }}>{f.pct} of views</div>
+                    <div style={{ fontSize: 12, color: '#9AA3B2' }}>{f.pct}</div>
                   </div>
                 </div>
                 {f.drop && (
@@ -782,19 +780,26 @@ function UsersView({ theme, users }) {
   // Real aggregation from users.campus (closest field to "faculty") and
   // users.year — both empty-state cleanly when unset rather than showing
   // fabricated percentages.
+  // Percentages/donut are computed against the categorized population (not
+  // users.length) so slice widths and percentages stay internally
+  // consistent — a donut with a "1%" legend but a full circle around the
+  // total user count would be misleading when most users haven't set this
+  // field yet.
   const facultyColors = ['#7C5CFF','#0098F0','#22C55E','#F59E0B','#E5484D','#19BFFF'];
   const facultyCounts = {};
   users.forEach(u => { if (u.campus) facultyCounts[u.campus] = (facultyCounts[u.campus] || 0) + 1; });
   const facultyEntries = Object.entries(facultyCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const categorizedFaculty = Object.values(facultyCounts).reduce((a, b) => a + b, 0);
   const maxFaculty = facultyEntries[0]?.[1] || 1;
-  const faculties = facultyEntries.map(([label, count]) => ({ label, count, pct: Math.round((count / users.length) * 100) + '%', w: count / maxFaculty }));
+  const faculties = facultyEntries.map(([label, count]) => ({ label, count, pct: Math.round((count / categorizedFaculty) * 100) + '%', w: count / maxFaculty }));
 
   const yearCounts = {};
   users.forEach(u => { if (u.year) yearCounts[u.year] = (yearCounts[u.year] || 0) + 1; });
   const yearEntries = Object.entries(yearCounts).sort((a, b) => a[0].localeCompare(b[0]));
+  const categorizedYears = Object.values(yearCounts).reduce((a, b) => a + b, 0);
   const yearLegend = yearEntries.map(([label, count], i) => ({
     label: label.length <= 2 ? `Year ${label}` : label,
-    value: Math.round((count / users.length) * 100) + '%',
+    value: Math.round((count / categorizedYears) * 100) + '%',
     count,
     color: facultyColors[i % facultyColors.length],
   }));
@@ -833,7 +838,7 @@ function UsersView({ theme, users }) {
         </div>
         <div style={{ background: '#fff', borderRadius: 20, padding: 20, boxShadow: '0 4px 16px rgba(16,24,40,0.05)' }}>
           <div style={{ fontSize: 17, fontWeight: 800 }}>By Year of Study</div>
-          <div style={{ fontSize: 13.5, color: '#7B8499', marginTop: 2 }}>Audience composition</div>
+          <div style={{ fontSize: 13.5, color: '#7B8499', marginTop: 2 }}>Of users with a year set ({categorizedYears} of {users.length})</div>
           {yearLegend.length === 0 ? (
             <div style={{ padding: '32px 0', textAlign: 'center', color: '#9AA3B2', fontSize: 13.5, fontWeight: 600 }}>
               No year data set yet
@@ -841,7 +846,7 @@ function UsersView({ theme, users }) {
           ) : (
             <>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', marginTop: 10 }}>
-                <Donut values={yearLegend.map(l => l.count)} colors={yearLegend.map(l => l.color)} centerVal={fmt(users.length)} centerLabel="users" theme={theme} />
+                <Donut values={yearLegend.map(l => l.count)} colors={yearLegend.map(l => l.color)} centerVal={fmt(categorizedYears)} centerLabel="users" theme={theme} />
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginTop: 8 }}>
                 {yearLegend.map((l, i) => (
@@ -861,7 +866,7 @@ function UsersView({ theme, users }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 16 }}>
         <div style={{ background: '#fff', borderRadius: 20, padding: 20, boxShadow: '0 4px 16px rgba(16,24,40,0.05)' }}>
           <div style={{ fontSize: 17, fontWeight: 800 }}>Top Campuses</div>
-          <div style={{ fontSize: 13.5, color: '#7B8499', marginTop: 2 }}>Share of users</div>
+          <div style={{ fontSize: 13.5, color: '#7B8499', marginTop: 2 }}>Of users with a campus set ({categorizedFaculty} of {users.length})</div>
           {faculties.length === 0 ? (
             <div style={{ padding: '32px 0', textAlign: 'center', color: '#9AA3B2', fontSize: 13.5, fontWeight: 600 }}>
               No campus data set yet
@@ -935,28 +940,40 @@ function UsersView({ theme, users }) {
 }
 
 // ── Real-time Activity view ───────────────────────────────────────────────────
-function ActivityView({ actFilter, setActFilter, theme, liveEvents }) {
-  const ACT_FILTER_TABS = ['all','rsvp','ticket','event','group','like'];
-  // liveEvents only contains realtime INSERTs received since this page
-  // mounted — there's no presence tracking or per-hour rate infrastructure,
-  // so counts below reflect what's actually been observed this session,
-  // not fabricated "right now" / "per hour" figures.
-  const countByKind = kind => liveEvents.filter(a => a.kind === kind).length;
+function ActivityView({ actFilter, setActFilter, theme, liveEvents, sessionCounts }) {
+  // subscribeToActivity only emits rsvp/ticket/like/group inserts — there's
+  // no realtime subscription on event inserts, so 'event' is not a real
+  // filter option here.
+  const ACT_FILTER_TABS = ['all','rsvp','ticket','group','like'];
+  // sessionCounts is a cumulative, unbounded per-kind counter (see the main
+  // Dashboard component) — using it here instead of liveEvents (which is
+  // capped to the last 20 items for feed display) keeps these totals correct
+  // even after more than 20 realtime events have arrived this session.
+  const countByKind = kind => sessionCounts[kind] || 0;
+  const totalSession = Object.values(sessionCounts).reduce((a, b) => a + b, 0);
   const liveStats = [
     { label: 'New RSVPs (session)',   value: String(countByKind('rsvp')),   iconBg: '#E4F7EC', color: '#15A34A', icon: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="m5 12 4.5 4.5L19 7" stroke="C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>' },
     { label: 'New Tickets (session)', value: String(countByKind('ticket')), iconBg: '#FFF6EC', color: '#F59E0B', icon: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M4 8.5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2 1.7 1.7 0 0 0 0 3.3 1.7 1.7 0 0 0 0 3.4 2 2 0 0 1-2 2H6a2 2 0 0 1-2-2 1.7 1.7 0 0 0 0-3.4 1.7 1.7 0 0 0 0-3.3Z" stroke="C" stroke-width="1.8" stroke-linejoin="round"/></svg>' },
-    { label: 'New Events (session)',  value: String(countByKind('event')),  iconBg: '#E9F6FF', color: '#0098F0', icon: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none"><rect x="3.5" y="5" width="17" height="15.5" rx="3" stroke="C" stroke-width="2"/><path d="M3.5 9.5h17M8 3v4M16 3v4" stroke="C" stroke-width="2" stroke-linecap="round"/></svg>' },
-    { label: 'Total (session)',       value: String(liveEvents.length),     iconBg: '#F1ECFF', color: '#7C5CFF', icon: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="3.4" stroke="C" stroke-width="2"/><path d="M5 20c0-3.6 3-5.6 7-5.6s7 2 7 5.6" stroke="C" stroke-width="2" stroke-linecap="round"/></svg>' },
+    { label: 'New Group Joins (session)', value: String(countByKind('group')), iconBg: '#FFF1F5', color: '#FF5A8A', icon: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none"><circle cx="9" cy="9" r="2.4" stroke="C" stroke-width="1.9"/><circle cx="16" cy="9" r="2.4" stroke="C" stroke-width="1.9"/><path d="M4 18c0-2 1.6-3.2 4-3.2M20 18c0-2-1.6-3.2-4-3.2" stroke="C" stroke-width="1.9" stroke-linecap="round"/></svg>' },
+    { label: 'Total (session)',       value: String(totalSession),          iconBg: '#F1ECFF', color: '#7C5CFF', icon: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="3.4" stroke="C" stroke-width="2"/><path d="M5 20c0-3.6 3-5.6 7-5.6s7 2 7 5.6" stroke="C" stroke-width="2" stroke-linecap="round"/></svg>' },
   ];
 
   const filtered = actFilter === 'all' ? liveEvents : liveEvents.filter(a => a.kind === actFilter);
 
-  const kindLabels = { rsvp: 'RSVPs', ticket: 'Tickets', event: 'Events', group: 'Groups', like: 'Likes' };
-  const typeCounts = {};
-  liveEvents.forEach(a => { typeCounts[a.kind] = (typeCounts[a.kind] || 0) + 1; });
-  const typePcts = Object.entries(typeCounts)
+  const kindLabels = { rsvp: 'RSVPs', ticket: 'Tickets', group: 'Groups', like: 'Likes' };
+  const typePcts = Object.entries(sessionCounts)
+    .filter(([, count]) => count > 0)
     .sort((a, b) => b[1] - a[1])
-    .map(([kind, count]) => ({ label: kindLabels[kind] || kind, kind, count, w: count / liveEvents.length, pct: Math.round((count / liveEvents.length) * 100) + '%' }));
+    .map(([kind, count]) => ({ label: kindLabels[kind] || kind, kind, count, w: count / totalSession, pct: Math.round((count / totalSession) * 100) + '%' }));
+
+  // liveEvents doesn't change while the feed is idle, so nothing else forces
+  // a re-render — without this, a "just now" label would never advance to
+  // "5m ago" etc. until the next realtime event arrived.
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => forceTick(t => t + 1), 30000);
+    return () => clearInterval(id);
+  }, []);
 
   const timeAgo = a => {
     if (!a.created_at) return 'just now';
@@ -1309,7 +1326,8 @@ export default function Dashboard() {
   const [recentReviews, setRecentReviews] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [notifsRead, setNotifsRead] = useState(false);
-  const [liveEvents, setLiveEvents] = useState([]); // real-time activity feed
+  const [liveEvents, setLiveEvents] = useState([]); // real-time activity feed (bounded, for display)
+  const [sessionCounts, setSessionCounts] = useState({}); // cumulative per-kind counts, unbounded
   const [currentUser, setCurrentUser] = useState(null);
 
   // ── Messages state ─────────────────────────────────────────────────────────
@@ -1397,9 +1415,13 @@ export default function Dashboard() {
   }, [messages]);
 
   // ── Real-time activity subscription ───────────────────────────────────────
+  // liveEvents is bounded to 20 for the feed display; sessionCounts tracks
+  // every event received this session (unbounded) so per-kind counts don't
+  // silently stop growing once the feed buffer fills up.
   useEffect(() => {
     const ch = subscribeToActivity(event => {
       setLiveEvents(prev => [event, ...prev].slice(0, 20));
+      setSessionCounts(prev => ({ ...prev, [event.kind]: (prev[event.kind] || 0) + 1 }));
     });
     return () => { ch.unsubscribe(); };
   }, []);
@@ -1469,11 +1491,14 @@ export default function Dashboard() {
   // If the dedicated KPI query hasn't resolved yet, fall back to the length
   // of the already-fetched users/events arrays — still real data, just a
   // less precise count until fetchOverviewKpis() returns.
+  // totalRsvps/totalTickets have no array-length fallback like users/events
+  // do, so they're left undefined (rendered as "—") rather than 0 while
+  // kpis hasn't loaded — indistinguishable from a real zero otherwise.
   const displayKpis = {
     totalUsers:  kpis?.totalUsers  ?? users.length,
     totalEvents: kpis?.totalEvents ?? events.length,
-    totalRsvps:  kpis?.totalRsvps  ?? 0,
-    totalTickets: kpis?.totalTickets ?? 0,
+    totalRsvps:  kpis?.totalRsvps,
+    totalTickets: kpis?.totalTickets,
   };
 
   return (
@@ -1640,7 +1665,7 @@ export default function Dashboard() {
             <UsersView theme={theme} users={users} />
           )}
           {nav === 'activity' && (
-            <ActivityView actFilter={actFilter} setActFilter={setActFilter} theme={theme} liveEvents={liveEvents} />
+            <ActivityView actFilter={actFilter} setActFilter={setActFilter} theme={theme} liveEvents={liveEvents} sessionCounts={sessionCounts} />
           )}
           {nav === 'messages' && (
             <MessagesView

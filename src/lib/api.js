@@ -161,14 +161,14 @@ export const markAllNotificationsRead = async (userId) => {
 // ── Funnel stats ──────────────────────────────────────────────────────────────
 
 export const fetchFunnelStats = async () => {
-  const [views, rsvps, tickets, reviews] = await Promise.all([
-    supabase.from('events').select('likes', { count: 'exact' }),
+  // No real view-tracking exists (no page-view/impression table), so there's
+  // no "views" stage here at all — RSVPs are the first measurable stage.
+  const [rsvps, tickets, reviews] = await Promise.all([
     supabase.from('event_rsvps').select('event_id', { count: 'exact' }),
     supabase.from('tickets').select('id', { count: 'exact' }),
     supabase.from('event_reviews').select('rating'),
   ]);
 
-  const totalViews   = (views.count ?? 0) * 100; // likes as proxy, scaled
   const totalRsvps   = rsvps.count  ?? 0;
   const totalTickets = tickets.count ?? 0;
 
@@ -182,7 +182,7 @@ export const fetchFunnelStats = async () => {
     return { stars, count, pct: ratings.length ? Math.round((count / ratings.length) * 100) : 0 };
   });
 
-  return { totalViews, totalRsvps, totalTickets, avgRating, reviewCount: ratings.length, ratingBreakdown };
+  return { totalRsvps, totalTickets, avgRating, reviewCount: ratings.length, ratingBreakdown };
 };
 
 export const fetchPendingEvents = async () => {
