@@ -177,7 +177,12 @@ export const fetchFunnelStats = async () => {
     ? (ratings.reduce((a, b) => a + b, 0) / ratings.length).toFixed(1)
     : 0;
 
-  return { totalViews, totalRsvps, totalTickets, avgRating, reviewCount: ratings.length };
+  const ratingBreakdown = [5, 4, 3, 2, 1].map(stars => {
+    const count = ratings.filter(r => r === stars).length;
+    return { stars, count, pct: ratings.length ? Math.round((count / ratings.length) * 100) : 0 };
+  });
+
+  return { totalViews, totalRsvps, totalTickets, avgRating, reviewCount: ratings.length, ratingBreakdown };
 };
 
 export const fetchPendingEvents = async () => {
