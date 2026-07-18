@@ -9,11 +9,19 @@ const LOADING_STYLE = {
   height: '100vh', fontFamily: 'Montserrat', color: '#7B8499',
 };
 
+// Temporary escape hatch so the dashboard UI can be reviewed while
+// Resend's sandbox sender restriction blocks the device-verification
+// email. Set VITE_BYPASS_AUTH=true in Vercel to enable, then unset it —
+// never leave this on by default. Read once at module load: it's a
+// build-time env var, not something that changes at runtime.
+const BYPASS_AUTH = import.meta.env.VITE_BYPASS_AUTH === 'true';
+
 export function PrivateRoute({ children }) {
   const { isLoaded, isSignedIn } = useClerkAuth();
   const [access, setAccess] = useState(undefined); // undefined = checking, else boolean
 
   useEffect(() => {
+    if (BYPASS_AUTH) return;
     if (!isLoaded) return;
     if (!isSignedIn) { setAccess(false); return; }
 
@@ -35,6 +43,8 @@ export function PrivateRoute({ children }) {
     })();
     return () => { cancelled = true; };
   }, [isLoaded, isSignedIn]);
+
+  if (BYPASS_AUTH) return children;
 
   if (!isLoaded || access === undefined) {
     return <div style={LOADING_STYLE}>Loading…</div>;
