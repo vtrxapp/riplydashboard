@@ -21,18 +21,67 @@ function json(body: unknown, status = 200) {
 // every real Clerk-authenticated request before this function even runs.
 // Deployed with verify_jwt: false and we verify the Clerk JWT signature
 // ourselves instead, so an unverified/forged token still can't get in.
-const CLERK_ISSUER = "https://fit-turkey-96.clerk.accounts.dev";
-const CLERK_JWKS = createRemoteJWKSet(new URL(`${CLERK_ISSUER}/.well-known/jwks.json`));
+const CLERK_ISSUER = Deno.env.get("CLERK_ISSUER") ?? "https://fit-turkey-96.clerk.accounts.dev";
+const CLERK_JWKS = createRemoteJWKSet(new URL(`${CLERK_ISSUER}/.well-known/jwks.json`), {
+  timeoutDuration: 5000,
+});
 
-async function getUserIdFromAuthHeader(req: Request): Promise<string | null> {
+// Per Clerk's manual-verification docs: signature + issuer alone don't
+// enforce which frontend origin a session token was issued to — the `azp`
+// claim (echoing the Origin header on the original Clerk request) must be
+// checked against an allowlist, or a token that leaked to/was replayed from
+// another app under the same Clerk instance would still be accepted here.
+const ALLOWED_AZP_ORIGINS = (Deno.env.get("CLERK_ALLOWED_ORIGINS") ?? "https://riplydashboard.vercel.app")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+function isAllowedOrigin(azp: string | undefined): boolean {
+  if (!azp) return false;
+  if (ALLOWED_AZP_ORIGINS.includes(azp)) return true;
+  // Vercel preview deployments get a unique per-branch subdomain — allow
+  // the whole preview pattern for this project/team rather than hardcoding
+  // every branch URL.
+  try {
+    return new URL(azp).hostname.endsWith("-vtrxapps-projects.vercel.app");
+  } catch {
+    return false;
+  }
+}
+
+class AuthError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
+// Throws AuthError(401) for an invalid/expired/missing/wrong-origin token,
+// or AuthError(503) if Clerk's JWKS endpoint itself couldn't be reached — a
+// brief JWKS outage shouldn't look identical to a bad token, and either way
+// we want it logged instead of silently swallowed.
+async function getUserIdFromAuthHeader(req: Request): Promise<string> {
   const auth = req.headers.get("Authorization") ?? "";
   const token = auth.replace(/^Bearer\s+/i, "");
-  if (!token) return null;
+  if (!token) throw new AuthError("Unauthorized", 401);
   try {
     const { payload } = await jwtVerify(token, CLERK_JWKS, { issuer: CLERK_ISSUER });
-    return typeof payload.sub === "string" ? payload.sub : null;
-  } catch {
-    return null;
+    if (typeof payload.sub !== "string") throw new AuthError("Unauthorized", 401);
+    const azp = typeof payload.azp === "string" ? payload.azp : undefined;
+    if (!isAllowedOrigin(azp)) {
+      console.error("device-verify-request: rejected token with unrecognized azp", azp);
+      throw new AuthError("Unauthorized", 401);
+    }
+    return payload.sub;
+  } catch (err) {
+    if (err instanceof AuthError) throw err;
+    const code = (err as { code?: string }).code ?? "";
+    if (code.startsWith("ERR_JWKS")) {
+      console.error("device-verify-request: JWKS fetch failed", err);
+      throw new AuthError("Auth temporarily unavailable", 503);
+    }
+    throw new AuthError("Unauthorized", 401);
   }
 }
 
@@ -101,7 +150,6 @@ Deno.serve(async (req: Request) => {
   // opaque "Failed to fetch" / CORS error instead of the real message.
   try {
     const userId = await getUserIdFromAuthHeader(req);
-    if (!userId) return json({ error: "Unauthorized" }, 401);
 
     let body: { device_token?: string };
     try {
@@ -148,6 +196,7 @@ Deno.serve(async (req: Request) => {
 
     return json({ success: true });
   } catch (err) {
+    if (err instanceof AuthError) return json({ error: err.message }, err.status);
     console.error("device-verify-request: unexpected error", err);
     return json({ error: (err as Error).message ?? "Unexpected error" }, 500);
   }
