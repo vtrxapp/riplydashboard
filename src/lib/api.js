@@ -163,26 +163,35 @@ export const markAllNotificationsRead = async (userId) => {
 export const fetchFunnelStats = async () => {
   // No real view-tracking exists (no page-view/impression table), so there's
   // no "views" stage here at all — RSVPs are the first measurable stage.
-  const [rsvps, tickets, reviews] = await Promise.all([
-    supabase.from('event_rsvps').select('event_id', { count: 'exact' }),
-    supabase.from('tickets').select('id', { count: 'exact' }),
-    supabase.from('event_reviews').select('rating'),
+  //
+  // Ratings are aggregated with per-star exact counts (head: true, no rows
+  // returned) rather than `select('rating')`, so this stays correct past
+  // Supabase's ~1000-row default return cap as event_reviews grows.
+  const [rsvps, tickets, totalReviews, ...starCounts] = await Promise.all([
+    supabase.from('event_rsvps').select('event_id', { count: 'exact', head: true }),
+    supabase.from('tickets').select('id', { count: 'exact', head: true }),
+    supabase.from('event_reviews').select('id', { count: 'exact', head: true }),
+    ...[5, 4, 3, 2, 1].map(stars =>
+      supabase.from('event_reviews').select('id', { count: 'exact', head: true }).eq('rating', stars)
+    ),
   ]);
+
+  for (const res of [rsvps, tickets, totalReviews, ...starCounts]) {
+    if (res.error) throw res.error;
+  }
 
   const totalRsvps   = rsvps.count  ?? 0;
   const totalTickets = tickets.count ?? 0;
+  const reviewCount  = totalReviews.count ?? 0;
 
-  const ratings = (reviews.data ?? []).map(r => r.rating);
-  const avgRating = ratings.length
-    ? (ratings.reduce((a, b) => a + b, 0) / ratings.length).toFixed(1)
-    : 0;
-
-  const ratingBreakdown = [5, 4, 3, 2, 1].map(stars => {
-    const count = ratings.filter(r => r === stars).length;
-    return { stars, count, pct: ratings.length ? Math.round((count / ratings.length) * 100) : 0 };
+  const ratingBreakdown = [5, 4, 3, 2, 1].map((stars, i) => {
+    const count = starCounts[i].count ?? 0;
+    return { stars, count, pct: reviewCount ? Math.round((count / reviewCount) * 100) : 0 };
   });
+  const weightedSum = ratingBreakdown.reduce((sum, r) => sum + r.stars * r.count, 0);
+  const avgRating = reviewCount ? (weightedSum / reviewCount).toFixed(1) : 0;
 
-  return { totalRsvps, totalTickets, avgRating, reviewCount: ratings.length, ratingBreakdown };
+  return { totalRsvps, totalTickets, avgRating, reviewCount, ratingBreakdown };
 };
 
 export const fetchPendingEvents = async () => {

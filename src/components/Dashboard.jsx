@@ -598,7 +598,7 @@ function FunnelView({ theme, funnelStats, pendingEvents, recentReviews, onApprov
   const rsvpToTicketDrop = conv != null ? (100 - parseFloat(conv)).toFixed(1) : null;
 
   const kpiDefs = [
-    { label: 'Overall Conversion', value: (conv ?? '0.0') + '%', iconBg: '#E4F7EC', color: '#15A34A', icon: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M3 5h18l-7 8v6l-4-2v-4L3 5Z" stroke="C" stroke-width="2" stroke-linejoin="round"/></svg>' },
+    { label: 'Overall Conversion', value: conv != null ? conv + '%' : '—', iconBg: '#E4F7EC', color: '#15A34A', icon: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M3 5h18l-7 8v6l-4-2v-4L3 5Z" stroke="C" stroke-width="2" stroke-linejoin="round"/></svg>' },
     { label: 'Avg. Event Rating',  value: String(avgRating || '—'), iconBg: '#FFF6EC', color: '#F59E0B', icon: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M12 3l2.6 5.3 5.9.85-4.25 4.15.99 5.85L12 16.9 6.75 19.05l.99-5.85L3.5 9.15l5.9-.85L12 3Z" stroke="C" stroke-width="1.8" stroke-linejoin="round"/></svg>' },
     { label: 'Pending Approvals',  value: String(pendingEvents.length), delta: 'live', pos: pendingEvents.length === 0, iconBg: '#E9F6FF', color: '#0098F0', icon: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.5" stroke="C" stroke-width="1.9"/><path d="M12 8v4.5l3 2" stroke="C" stroke-width="1.9" stroke-linecap="round"/></svg>' },
     { label: 'Biggest Drop-off',   value: 'RSVP→Ticket', delta: rsvpToTicketDrop != null ? '-' + rsvpToTicketDrop + '%' : '—', pos: false, iconBg: '#FDE7E4', color: '#E5484D', icon: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M4 6l7 7 3-3 6 6" stroke="C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 16v-4h-4" stroke="C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>' },
@@ -609,7 +609,7 @@ function FunnelView({ theme, funnelStats, pendingEvents, recentReviews, onApprov
   // there's no real data source for it. RSVPs are the first real stage.
   const stages = [
     { label: 'RSVPs',          value: fmt(totalRsvps),   pct: totalRsvps > 0 ? '100%' : '—', w: totalRsvps > 0 ? 100 : 0, c: '#19BFFF', drop: '' },
-    { label: 'Tickets Bought', value: fmt(totalTickets), pct: (conv ?? '0') + '%', w: Math.min(100, parseFloat(conv || 0)), c: '#15A34A', drop: rsvpToTicketDrop != null ? rsvpToTicketDrop + '%' : '' },
+    { label: 'Tickets Bought', value: fmt(totalTickets), pct: conv != null ? conv + '%' : '—', w: Math.min(100, parseFloat(conv || 0)), c: '#15A34A', drop: rsvpToTicketDrop != null ? rsvpToTicketDrop + '%' : '' },
   ];
 
   // Real per-star breakdown, computed from every review (not just the 5
@@ -1319,8 +1319,10 @@ export default function Dashboard() {
   // ── Data state ─────────────────────────────────────────────────────────────
   const [kpis, setKpis] = useState(null);
   const [events, setEvents] = useState([]);
+  const [eventsLoaded, setEventsLoaded] = useState(false);
   const [groups, setGroups] = useState([]);
   const [users, setUsers] = useState([]);
+  const [usersLoaded, setUsersLoaded] = useState(false);
   const [funnelStats, setFunnelStats] = useState(null);
   const [pendingEvents, setPendingEvents] = useState([]);
   const [recentReviews, setRecentReviews] = useState([]);
@@ -1362,11 +1364,11 @@ export default function Dashboard() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [kpisData, eventsData, groupsData, usersData, funnelData, pendingData, reviewsData, notifsData] = await Promise.all([
+      const [kpisData, eventsResult, groupsData, usersResult, funnelData, pendingData, reviewsData, notifsData] = await Promise.all([
         fetchOverviewKpis().catch(() => null),
-        fetchEvents().catch(() => []),
+        fetchEvents().then(d => ({ ok: true, d })).catch(() => ({ ok: false, d: [] })),
         fetchGroups().catch(() => []),
-        fetchUsers().catch(() => []),
+        fetchUsers().then(d => ({ ok: true, d })).catch(() => ({ ok: false, d: [] })),
         fetchFunnelStats().catch(() => null),
         fetchPendingEvents().catch(() => []),
         fetchRecentReviews().catch(() => []),
@@ -1374,9 +1376,11 @@ export default function Dashboard() {
       ]);
       if (cancelled) return;
       setKpis(kpisData);
-      setEvents(eventsData);
+      setEvents(eventsResult.d);
+      setEventsLoaded(eventsResult.ok);
       setGroups(groupsData);
-      setUsers(usersData);
+      setUsers(usersResult.d);
+      setUsersLoaded(usersResult.ok);
       setFunnelStats(funnelData);
       setPendingEvents(pendingData);
       setRecentReviews(reviewsData);
@@ -1490,13 +1494,16 @@ export default function Dashboard() {
 
   // If the dedicated KPI query hasn't resolved yet, fall back to the length
   // of the already-fetched users/events arrays — still real data, just a
-  // less precise count until fetchOverviewKpis() returns.
+  // less precise count until fetchOverviewKpis() returns. That fallback only
+  // applies once those fetches have actually succeeded (usersLoaded/
+  // eventsLoaded) — otherwise an initial or failed empty array would render
+  // as a real zero instead of "—".
   // totalRsvps/totalTickets have no array-length fallback like users/events
   // do, so they're left undefined (rendered as "—") rather than 0 while
   // kpis hasn't loaded — indistinguishable from a real zero otherwise.
   const displayKpis = {
-    totalUsers:  kpis?.totalUsers  ?? users.length,
-    totalEvents: kpis?.totalEvents ?? events.length,
+    totalUsers:  kpis?.totalUsers  ?? (usersLoaded ? users.length : undefined),
+    totalEvents: kpis?.totalEvents ?? (eventsLoaded ? events.length : undefined),
     totalRsvps:  kpis?.totalRsvps,
     totalTickets: kpis?.totalTickets,
   };
