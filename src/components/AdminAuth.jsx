@@ -585,8 +585,11 @@ export default function AdminAuth() {
           await setSignUpActive({ session: result.createdSessionId });
           try {
             await provisionAdminProfile(result.createdUserId);
-          } catch (profileErr) {
-            showToast('Signed in, but profile setup failed: ' + profileErr.message);
+          } catch {
+            // admin_profiles is provisioned manually (service_role only) —
+            // self-service signup can create a Clerk account, but an
+            // existing admin has to grant dashboard access before it works.
+            showToast('Account created — an existing admin needs to grant you dashboard access before you can sign in.');
             return;
           }
           // No email code was required to create the account, so this device
@@ -680,13 +683,14 @@ export default function AdminAuth() {
         await setSignUpActive({ session: result.createdSessionId });
         try {
           await provisionAdminProfile(result.createdUserId);
-        } catch (profileErr) {
+        } catch {
+          // admin_profiles is provisioned manually (service_role only) — see
+          // the comment in the other provisionAdminProfile() call site above.
           // The Clerk session is already active at this point (setSignUpActive
           // above already ran), so Clerk won't allow "verifying" again if the
-          // user retries this form. Drop out of the verification screen —
-          // the recovery effect below will retry provisioning automatically
-          // now that isSignedIn is true, instead of leaving them stuck here.
-          showToast('Verified, but profile setup failed — retrying: ' + profileErr.message);
+          // user retries this form — drop out of the verification screen
+          // rather than leaving them stuck on it.
+          showToast('Account verified — an existing admin needs to grant you dashboard access before you can sign in.');
           setVerifying(false);
           return;
         }

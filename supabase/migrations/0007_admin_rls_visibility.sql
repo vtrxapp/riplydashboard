@@ -13,11 +13,13 @@ create policy events_select_admin on public.events
   for select
   using (public.is_admin());
 
+-- WITH CHECK omitted intentionally: Postgres defaults it to the USING
+-- expression, and is_admin() doesn't reference row data either way, so a
+-- second explicit call would be a no-op.
 drop policy if exists events_update_admin on public.events;
 create policy events_update_admin on public.events
   for update
-  using (public.is_admin())
-  with check (public.is_admin());
+  using (public.is_admin());
 
 -- Tickets: admin KPIs/funnel need the true platform-wide ticket count, not
 -- just tickets the admin personally purchased.
