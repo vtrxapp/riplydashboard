@@ -43,14 +43,23 @@ export const fetchEvents = async (status = null) => {
   return data ?? [];
 };
 
-export const createEvent = async (payload, userId) => {
+export const createEvent = async (payload, userId, status = 'pending') => {
   const { data, error } = await supabase
     .from('events')
-    .insert({ ...payload, created_by: userId, status: 'pending' })
+    .insert({ ...payload, created_by: userId, status })
     .select()
     .single();
   if (error) throw error;
   return data;
+};
+
+export const uploadEventCover = async (file) => {
+  const ext = file.name.split('.').pop();
+  const path = `${crypto.randomUUID()}.${ext}`;
+  const { error } = await supabase.storage.from('event-covers').upload(path, file);
+  if (error) throw error;
+  const { data } = supabase.storage.from('event-covers').getPublicUrl(path);
+  return data.publicUrl;
 };
 
 export const updateEventStatus = async (id, status) => {
@@ -91,10 +100,41 @@ export const fetchUsers = async () => {
 export const fetchChats = async () => {
   const { data, error } = await supabase
     .from('chats')
-    .select('id, name, initial, color, last_message, last_message_at')
+    .select('id, name, initial, color, last_message, last_message_at, group_id')
     .order('last_message_at', { ascending: false });
   if (error) throw error;
   return data ?? [];
+};
+
+// Reuses the existing chat for a group (chats.group_id is unique per group)
+// instead of creating a duplicate every time the admin clicks "Message".
+export const startGroupChat = async (group, adminUserId) => {
+  const { data: existing, error: findError } = await supabase
+    .from('chats')
+    .select('id, name, initial, color, last_message, last_message_at, group_id')
+    .eq('group_id', group.id)
+    .maybeSingle();
+  if (findError) throw findError;
+  if (existing) return existing;
+
+  const { data: chat, error } = await supabase
+    .from('chats')
+    .insert({
+      group_id: group.id,
+      name: group.name,
+      initial: group.initial || group.name?.charAt(0) || '?',
+      color: group.logo_color || null,
+    })
+    .select('id, name, initial, color, last_message, last_message_at, group_id')
+    .single();
+  if (error) throw error;
+
+  if (adminUserId) {
+    // Best-effort: chat_participants tracks who's in the thread, but a
+    // missing row here shouldn't block the admin from messaging the group.
+    await supabase.from('chat_participants').insert({ chat_id: chat.id, user_id: adminUserId });
+  }
+  return chat;
 };
 
 export const fetchMessages = async (chatId) => {
@@ -161,23 +201,37 @@ export const markAllNotificationsRead = async (userId) => {
 // ── Funnel stats ──────────────────────────────────────────────────────────────
 
 export const fetchFunnelStats = async () => {
-  const [views, rsvps, tickets, reviews] = await Promise.all([
-    supabase.from('events').select('likes', { count: 'exact' }),
-    supabase.from('event_rsvps').select('event_id', { count: 'exact' }),
-    supabase.from('tickets').select('id', { count: 'exact' }),
-    supabase.from('event_reviews').select('rating'),
+  // No real view-tracking exists (no page-view/impression table), so there's
+  // no "views" stage here at all — RSVPs are the first measurable stage.
+  //
+  // Ratings are aggregated with per-star exact counts (head: true, no rows
+  // returned) rather than `select('rating')`, so this stays correct past
+  // Supabase's ~1000-row default return cap as event_reviews grows.
+  const [rsvps, tickets, totalReviews, ...starCounts] = await Promise.all([
+    supabase.from('event_rsvps').select('event_id', { count: 'exact', head: true }),
+    supabase.from('tickets').select('id', { count: 'exact', head: true }),
+    supabase.from('event_reviews').select('id', { count: 'exact', head: true }),
+    ...[5, 4, 3, 2, 1].map(stars =>
+      supabase.from('event_reviews').select('id', { count: 'exact', head: true }).eq('rating', stars)
+    ),
   ]);
 
-  const totalViews   = (views.count ?? 0) * 100; // likes as proxy, scaled
+  for (const res of [rsvps, tickets, totalReviews, ...starCounts]) {
+    if (res.error) throw res.error;
+  }
+
   const totalRsvps   = rsvps.count  ?? 0;
   const totalTickets = tickets.count ?? 0;
+  const reviewCount  = totalReviews.count ?? 0;
 
-  const ratings = (reviews.data ?? []).map(r => r.rating);
-  const avgRating = ratings.length
-    ? (ratings.reduce((a, b) => a + b, 0) / ratings.length).toFixed(1)
-    : 0;
+  const ratingBreakdown = [5, 4, 3, 2, 1].map((stars, i) => {
+    const count = starCounts[i].count ?? 0;
+    return { stars, count, pct: reviewCount ? Math.round((count / reviewCount) * 100) : 0 };
+  });
+  const weightedSum = ratingBreakdown.reduce((sum, r) => sum + r.stars * r.count, 0);
+  const avgRating = reviewCount ? (weightedSum / reviewCount).toFixed(1) : 0;
 
-  return { totalViews, totalRsvps, totalTickets, avgRating, reviewCount: ratings.length };
+  return { totalRsvps, totalTickets, avgRating, reviewCount, ratingBreakdown };
 };
 
 export const fetchPendingEvents = async () => {
